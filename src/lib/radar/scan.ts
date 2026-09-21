@@ -7,6 +7,7 @@ import {
   resolveTelegram,
   saveScanResult,
 } from "./persistence.ts";
+import { evaluateSTier, passesAllSTierRules } from "./stier.ts";
 import type { ScanResult, SearchConfig, StandardListing, TelegramSettings } from "./types.ts";
 
 const ScanInputSchema = {
@@ -77,14 +78,37 @@ async function executeScan(config: SearchConfig, enrich: boolean): Promise<ScanR
   }
 
   listings = listings
-    .map((row) => applyFilter(row, config))
+    .map((row) => {
+      const graded = applyFilter(row, config);
+      const breakdown = evaluateSTier(graded);
+      return {
+        ...graded,
+        isSTier: passesAllSTierRules(breakdown),
+        sTierScore: breakdown.score,
+        sTierBreakdown: breakdown,
+      };
+    })
     .sort((a, b) => {
+      // S-Tier first, then by score, then by A-grade → candidate → rejected.
+      if (a.isSTier !== b.isSTier) return a.isSTier ? -1 : 1;
+      if (a.isSTier && b.isSTier) return b.sTierScore - a.sTierScore;
       const rank = { a: 0, candidate: 1, rejected: 2 };
       if (rank[a.grade] !== rank[b.grade]) return rank[a.grade] - rank[b.grade];
       return (b.year ?? 0) - (a.year ?? 0);
     });
 
   const stage1 = listings.filter((row) => row.grade === "a" || row.grade === "candidate");
+  const sTier = listings.filter((row) => row.isSTier);
+  const sweetDiscountListings = sTier.filter(
+    (row) => row.discountRate != null && row.discountRate >= 30,
+  );
+  const sweetDiscountPct =
+    sweetDiscountListings.length > 0
+      ? Math.round(
+          sweetDiscountListings.reduce((sum, row) => sum + (row.discountRate ?? 0), 0) /
+            sweetDiscountListings.length,
+        )
+      : 0;
   return {
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - started,
@@ -96,6 +120,8 @@ async function executeScan(config: SearchConfig, enrich: boolean): Promise<ScanR
       gradeA: listings.filter((row) => row.grade === "a").length,
       candidates: listings.filter((row) => row.grade === "candidate").length,
       rejected: listings.filter((row) => row.grade === "rejected").length,
+      sTier: sTier.length,
+      sweetDiscountPct,
     },
   };
 }

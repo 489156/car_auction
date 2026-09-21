@@ -5,6 +5,9 @@ export type SourceStatus = "live" | "blocked" | "empty" | "error";
 
 export type ListingGrade = "a" | "candidate" | "rejected";
 
+/** S-Tier precision tier derived from the 5-rule checklist. */
+export type STierTier = "s" | "a" | null;
+
 export type SearchConfig = {
   minYear: number;
   maxMileage: number;
@@ -13,6 +16,23 @@ export type SearchConfig = {
   keywordsExclude: string[];
   requireKeyKeyword: boolean;
   maxListingsPerSource: number;
+};
+
+export type STierBreakdown = {
+  /** Mileage ≤ 15,000 km */
+  shortMileage: boolean;
+  /** Year ≥ 2024 (manufacturer warranty still in effect) */
+  warrantyValid: boolean;
+  /** Discount ≥ 30% (1-2 times un-bid sweet spot) */
+  sweetDiscount: boolean;
+  /** Stored at a recognized professional keeper (Automart/오토마트/공인/오토허브) */
+  officialStorage: boolean;
+  /** Accident history + mileage cross-checked against external sources */
+  crossValidated: boolean;
+  /** Computed 0–100 score */
+  score: number;
+  /** Korean explanation bullets for the detail modal */
+  reasons: string[];
 };
 
 export type StandardListing = {
@@ -39,6 +59,14 @@ export type StandardListing = {
   grade: ListingGrade;
   rejectReasons: string[];
   collectedAt: string;
+  /** Detected/derived storage site name (e.g. "오토마트 인천보관소"). */
+  storageSite: string | null;
+  /** True when the S-Tier 5-rule checklist is fully passed. */
+  isSTier: boolean;
+  /** 0–100 S-Tier precision score (only meaningful when isSTier is true). */
+  sTierScore: number;
+  /** Per-rule breakdown for the detail modal. */
+  sTierBreakdown: STierBreakdown;
 };
 
 export type SourceReport = {
@@ -60,6 +88,8 @@ export type ScanResult = {
     gradeA: number;
     candidates: number;
     rejected: number;
+    sTier: number;
+    sweetDiscountPct: number;
   };
 };
 
@@ -67,6 +97,15 @@ export type TelegramSettings = {
   botToken: string;
   chatId: string;
   enabled: boolean;
+};
+
+export type WebAlertSettings = {
+  /** Browser/desktop push for S-Tier matches */
+  enabled: boolean;
+  /** Score cutoff (70–95) for instant web alerts */
+  threshold: number;
+  /** Auto-scan cadence label */
+  interval: "6h" | "12h" | "realtime";
 };
 
 export const PLATFORM_META: Record<

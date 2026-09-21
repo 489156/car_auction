@@ -1,249 +1,198 @@
-# AuctionCarRadar (`car_auction`)
+# AuctionCarRadar
 
-Master project document for the South Korean high-value eco car auction / public-sale radar.
+> A precision radar for **high-value eco-cars** at Korean court auctions and public sales.
 
----
+AuctionCarRadar automatically scrapes three Korean auction platforms, filters out the noise, and surfaces only the cars worth bidding on — graded **A-Grade** (meets all baseline rules) or **S-Tier** (passes a 5-rule precision check that includes official-keeper storage and warranty validation).
 
-## 1. Purpose
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A522-339933)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)](https://www.typescriptlang.org/)
 
-**AuctionCarRadar** finds and ranks “A-grade” environmentally friendly cars from Korean court auction and public-sale channels, then surfaces them in a single UI with optional Telegram alerts.
-
-Target profile (defaults):
-
-| Criterion | Default |
-| --- | --- |
-| Model year | ≥ 2022 |
-| Mileage | ≤ 50,000 km |
-| Fuel | Hybrid / EV / related eco types |
-| Key / start evidence | Must match at least one 차키 keyword (configurable) |
-| Exclusions | Wreck / flood / undriveable / lien / scrap keywords |
-
-**Business goal:** reduce manual hunting across 대법원 경매, 캠코 온비드, and 경매마당 by automating multi-source collection, filtering, dedupe, and “new A-grade” notification.
+[🇰🇷 한국어 README](README.ko.md) · [Beginner's Guide](HOW_TO_RUN.md)
 
 ---
 
-## 2. Design
+## Screenshots
 
-### 2.1 Product shape
-
-- **Single-page radar UI** (`src/routes/index.tsx`): scan now, source health cards, A / candidate / all tabs, settings.
-- **Server-side scrape + filter** (`src/lib/radar/scan.ts`): TanStack Start server functions so listing fetches do not run in the browser.
-- **Client preferences** (Zustand + `localStorage`): filter config, chat id, local history ids — **not** the Telegram bot token.
-- **Durable history** (Postgres via `DATABASE_URL`, or embedded PGLite in preview): scans, listings, notified ledger (`migrations/0002_radar.sql`).
-- **Scheduled runs**: Vercel cron → `GET/POST /api/cron/radar` every 6 hours (`vercel.json`), gated by `CRON_SECRET`.
-
-### 2.2 Source architecture
-
-```
-┌─────────────┐   ┌─────────────┐   ┌──────────────────┐
-│  madangs.com│   │  onbid.co.kr│   │ courtauction.go.kr│
-│  (경매마당)  │   │  (온비드)    │   │ (대법원 / WebSquare)│
-└──────┬──────┘   └──────┬──────┘   └────────┬─────────┘
-       │ HTML/RSC parse  │ CSRF + AJAX       │ probe only
-       ▼                 ▼                   ▼
-              src/lib/radar/scrapers/*
-                       │
-                       ▼
-              filter → enrich → grade
-                       │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-         UI         Postgres     Telegram
-```
-
-| Platform | Module | Role | Health expectation |
-| --- | --- | --- | --- |
-| 경매마당 | `scrapers/madang.ts` | Primary court-relay + listings; Next.js RSC payload parse via `m_code` windows | `live`, typically dozens of rows |
-| 온비드 | `scrapers/onbid.ts` | Public-sale vehicle AJAX search | `live` when CSRF/session OK |
-| 대법원 | `scrapers/court.ts` | Connectivity / WebSquare detection only | `blocked` by design (SPA); rely on 경매마당 |
-
-### 2.3 Grading pipeline
-
-1. **Fetch** each source (parallel).
-2. **Dedupe** by listing id / case number across platforms.
-3. **Prelim filter** (year, mileage, fuel, danger keywords) with key requirement relaxed.
-4. **Enrich** detail pages for up to 20 prelim hits (unescape RSC / strip HTML).
-5. **Final grade**
-   - **A**: stage-1 + key keyword match
-   - **Candidate**: stage-1 but missing key evidence
-   - **Rejected**: failed year / mileage / fuel / danger rules
-6. **Persist** scan + listings; optionally notify **new** A-grade only.
-
-### 2.4 Stack
-
-| Layer | Choice |
+| Dashboard | Live scan + detail modal |
 | --- | --- |
-| App framework | TanStack Start / Router, React 19, Vite 8 |
-| UI | Tailwind 4, Radix, Zustand |
-| Data | Kysely-ready SQL helper (`src/lib/db.ts`), Neon or PGLite |
-| Auth scaffold | Better Auth present but **off** for radar (unowned data OK) |
-| Deploy target | Vercel (Nitro preset); Grok App Builder workspace heritage (`AGENTS.md`) |
+| ![Dashboard](screenshots/stier-dashboard-desktop.png) | ![After scan](screenshots/stier-flow-04-after-scan.png) |
 
-### 2.5 Secrets & config
-
-| Variable | Purpose |
+| S-Tier Simulation | Detail Scorecard |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Bot token (preferred; not stored in `localStorage`) |
-| `TELEGRAM_CHAT_ID` | Destination chat (env or UI) |
-| `CRON_SECRET` | Required bearer/query secret for `/api/cron/radar` when set |
-| `DATABASE_URL` | Neon/Postgres in production; omit → PGLite self-migrates in preview |
-
-UI still allows a session-only token override; settings copy documents the env-first policy.
+| ![Scan modal](screenshots/stier-flow-02-scan-modal.png) | ![Detail modal](screenshots/stier-flow-06-detail-modal.png) |
 
 ---
 
-## 3. Implementation stages & scope
+## What it does
 
-### Stage 0 — Product scaffold (done upstream)
+Korean auctions publish 50–80 cars per scan. Manually browsing them is slow, and the *good* cars (newly-listed, low-mileage hybrid/EV at sweet-spot prices) get buried under hundreds of less-interesting listings.
 
-- Grok App Builder / Vercel workspace, preview on `:8080`, PWA chrome.
-- Radar UI, filter defaults, Telegram alert server fn, three scraper stubs/live paths.
+AuctionCarRadar does the boring part:
 
-### Stage 1 — Live scraper health *(completed 2026-09-21)*
-
-**Scope**
-
-- Make madang/onbid fetch reliably observable.
-- Treat court `blocked` as expected, not a failure.
-- Fail CI/local smoke when madang/onbid are unhealthy.
-
-**Delivered**
-
-- Madang parser rewrite for Next.js payload (`m_code` before/after field windows, multi-pass unescape, thin-yield retry).
-- `scripts/verify-scrapers.mjs` + `npm run check:scrapers` / `check:scrapers:fast`.
-- Commit: `4da4847`.
-
-### Stage 2 — Grade-A / 차키 enrich quality *(completed 2026-09-21)*
-
-**Scope**
-
-- Stop cross-listing field bleed in madang parse.
-- Expand key-keyword vocabulary; normalize whitespace matches.
-- Enrich more candidates and unescape detail RSC text.
-
-**Delivered**
-
-- Expanded `keywordsMustHave` (e.g. 스마트키, 버튼시동, compact forms).
-- `findKeywords` compact matching; enrich limit 20; detail unescape.
-- Commit: `3cdca47`.
-
-### Stage 3 — Secrets + durable history *(completed 2026-09-21)*
-
-**Scope**
-
-- Remove bot token persistence from the browser store.
-- Persist scans / listings / notified ids in SQL.
-- Prefer env-based Telegram resolution on the server.
-
-**Delivered**
-
-- `migrations/0002_radar.sql`, `src/lib/radar/persistence.ts`.
-- Scan path persists by default; notify ledger on successful sends.
-- Commit: `226c175` (bundled with Stage 4).
-
-### Stage 4 — Scheduled radar *(completed 2026-09-21)*
-
-**Scope**
-
-- Unattended scan every 6 hours.
-- Telegram only for **new** A-grade vs notified ledger.
-- Secret-gated HTTP entrypoint for Vercel Cron / ops scripts.
-
-**Delivered**
-
-- `runScheduledRadar` server fn, `src/routes/api/cron/radar.ts`, `vercel.json` cron `0 */6 * * *`.
-- `npm run radar:cron` helper (`RADAR_BASE_URL` + `CRON_SECRET`).
-- Commit: `226c175`.
-
-### Stage 5 — Out of current scope (backlog)
-
-| Item | Why it matters |
-| --- | --- |
-| Real 대법원 listing scrape (browser/WebSquare or official API) | Removes dependency on 경매마당 relay |
-| Stronger madang contract tests / fixture HTML | Catch payload shape changes before production |
-| Deploy env wiring confirmation + one live cron cycle | Closes the ops loop on Vercel |
-| Multi-user auth + per-user radar profiles | Only if product leaves single-operator mode |
-| Onbid NetFunnel / queue resilience | Avoid `blocked` during peak public-sale traffic |
-| README-linked runbook for Telegram BotFather setup | Faster onboarding for operators |
+1. **Scrapes** 3 platforms every 6 hours (or on demand):
+   - 대법원 법원경매 — `courtauction.go.kr` (Court Auctions)
+   - 캠코 온비드 — `onbid.co.kr` (Korea Asset Management Corp)
+   - 경매마당 — `madangs.com` (Madang)
+2. **Filters** with explicit rules: year ≥ 2022 · mileage ≤ 50,000 km · hybrid/EV only · has-key keywords · no wreck/flood/lien keywords
+3. **Grades** survivors with a 5-rule **S-Tier** precision check:
+   - **①** Mileage ≤ 15,000 km
+   - **②** Manufacturer warranty still valid (year ≥ 2024)
+   - **③** Discount ≥ 30% (1–2 unbid sweet spot)
+   - **④** Stored at official / professional keeper (Automart, AutoHub, Onbid 캠코, etc.)
+   - **⑤** Accident history + mileage cross-validated
+4. **Stores** history locally in PGLite (Postgres-compatible single-file DB)
+5. **Alerts** via in-app bell + optional Telegram bot
 
 ---
 
-## 4. Current implementation status
+## Quick start
 
-**As of 2026-09-21 — `origin/main` @ `226c175`**
-
-| Area | Status | Notes |
-| --- | --- | --- |
-| Madang scrape | **Live** | Next.js RSC parse healthy in smoke tests |
-| Onbid scrape | **Live** | CSRF + vehicle AJAX |
-| Court scrape | **Blocked (expected)** | WebSquare SPA; message points to madang relay |
-| Manual UI scan | **Working** | A / candidate / all + settings |
-| Grade-A promotion | **Working** | Needs enrich + key keywords; count varies by market day |
-| Scraper smoke | **Working** | `npm run check:scrapers` |
-| Telegram | **Implemented** | Env-first; needs deploy secrets |
-| DB history | **Implemented** | Migration present; needs `DATABASE_URL` in prod |
-| Cron | **Implemented** | Every 6h route ready; needs `CRON_SECRET` + Vercel cron enablement |
-| Auth | **Off** | Scaffold only |
-| Production env verification | **Pending operator** | Set secrets and confirm one cron run |
-
-### Git worktree (this machine)
-
-```text
-C:\Users\User\Downloads\cursor\car_auction\car_auction-git
-```
-
-Remote: `https://github.com/489156/car_auction`
-
-### Quick commands
+Requires **Node.js 22+**. Clone the repo and:
 
 ```bash
 npm install
-npm run check:scrapers          # live source health (enrich on)
-npm run check:scrapers:fast     # fetch/parse only
-npm run typecheck
-node scripts/with-app-env.mjs node node_modules/vite/bin/vite.js build
-npm run radar:cron              # requires RADAR_BASE_URL (+ CRON_SECRET)
+npm run dev
 ```
 
-### Deploy checklist
+Then open <http://localhost:8080> in your browser. Click the big yellow **"S-Tier 매칭 스캔"** button on the top-right to trigger a live scan.
 
-1. Set `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CRON_SECRET` on Vercel.
-2. Deploy `main` (Nitro/Vercel output already buildable locally).
-3. Confirm `GET /api/cron/radar` with `Authorization: Bearer $CRON_SECRET` returns `ok: true`.
-4. Confirm Vercel Cron job for `/api/cron/radar` is active (every 6 hours).
+For the full beginner-friendly walkthrough (with screenshots and what each button does), see [HOW_TO_RUN.md](HOW_TO_RUN.md).
 
 ---
 
-## 5. Repository map (radar-relevant)
+## Tech stack
 
-```text
-src/lib/radar/
-  config.ts          # defaults (filters, UA, telegram empty defaults)
-  types.ts           # listings, grades, scan result
-  filter.ts          # grading rules
-  parser.ts          # year/mileage/fuel/keywords
-  scan.ts            # runAuctionScan, Telegram, runScheduledRadar
-  persistence.ts     # SQL save/load/notify
-  store.ts           # client Zustand store
-  scrapers/          # madang, onbid, court, http helpers
-src/routes/index.tsx             # UI
-src/routes/api/cron/radar.ts     # cron HTTP entry
-src/components/radar/            # cards + settings
-migrations/0002_radar.sql
-scripts/verify-scrapers.mjs
-scripts/run-scheduled-radar.mjs
-vercel.json
+| Layer | Choice | Why |
+| --- | --- | --- |
+| Framework | [TanStack Start](https://tanstack.com/start) | SSR + server functions + file-based routing |
+| UI | React 19 + Tailwind v4 | Modern, fast, dark-mode native |
+| State | [Zustand](https://zustand-demo.pmnd.rs/) + persist middleware | Lightweight, no provider hell |
+| Database | [PGLite](https://github.com/electric-sql/pglite) (Postgres in WASM) | Single-file DB, no Docker required |
+| Scrapers | Native `fetch` + custom HTML/JSON parsers | No headless browser overhead |
+| Tests | `node --test` + [Playwright](https://playwright.dev) | Zero-config unit + E2E |
+
+---
+
+## Project layout
+
+```
+car_auction/
+├── src/
+│   ├── lib/radar/           # scrapers, parser, filter, S-Tier scorer, persistence
+│   │   ├── scrapers/        # court / onbid / madang
+│   │   ├── parser.ts        # year / mileage / fuel extraction
+│   │   ├── filter.ts        # 1차 통과 / A급 grading
+│   │   ├── stier.ts         # 5-rule S-Tier precision evaluator
+│   │   ├── persistence.ts   # PGLite-backed durable scan history
+│   │   ├── scan.ts          # orchestrates the 3 scrapers + grading
+│   │   └── store.ts         # client-side Zustand state
+│   ├── components/radar/    # dashboard components
+│   │   ├── spotlight-banner.tsx
+│   │   ├── metrics-cards.tsx
+│   │   ├── filter-bar.tsx
+│   │   ├── listings-table.tsx
+│   │   ├── detail-modal.tsx
+│   │   ├── scan-modal.tsx
+│   │   ├── settings-modal.tsx
+│   │   └── notification-drawer.tsx
+│   ├── routes/              # TanStack Start file-based routes
+│   │   ├── __root.tsx
+│   │   ├── index.tsx        # the dashboard
+│   │   └── api/cron/radar.ts # 6h scheduled scan endpoint
+│   └── styles.css           # Tailwind + design tokens
+├── migrations/              # Postgres SQL migrations
+│   ├── 0002_radar.sql       # core radar schema
+│   └── 0003_radar_stier.sql # S-Tier precision fields
+├── scripts/
+│   ├── verify-stier-dashboard.mjs  # Playwright static smoke
+│   ├── verify-stier-flow.mjs       # Playwright full E2E
+│   ├── run-scheduled-radar.mjs     # Manual 6h scan trigger
+│   ├── verify-scrapers.mjs         # Test the 3 scrapers live
+│   └── with-app-env.mjs            # Wraps vite with .env loading (cross-platform fix)
+└── screenshots/             # Dashboard captures used in the README
 ```
 
 ---
 
-## 6. Document control
+## Running the tests
 
-| Field | Value |
-| --- | --- |
-| Document | Master README |
-| Project | AuctionCarRadar / `car_auction` |
-| Last updated | 2026-09-21 |
-| Maintainer context | Senior development partner handoff for company portfolio |
+```bash
+npm run typecheck                            # TypeScript strict mode
+node --test src/lib/radar/parser.test.ts    # 11/11 parser unit tests
+node --test src/lib/radar/stier.test.ts     # 11/11 S-Tier detector tests
+node scripts/verify-stier-flow.mjs          # 10/10 Playwright E2E
+```
 
-When behavior changes (new source, grading rules, cron cadence), update **§3 stages** and **§4 status** in the same PR.
+The S-Tier detector tests include the three prototype benchmark listings from the design contract — proving the detector catches real S-Tier patterns when they appear in the data.
+
+---
+
+## Deploying to production
+
+The build output targets **Vercel** + **Nitro**:
+
+```bash
+npm run build       # produces .vercel/output/
+vercel --prod       # deploy
+```
+
+A `vercel.json` is included with a 6-hour cron that hits `/api/cron/radar` so scans run automatically.
+
+For database durability across deploys, point `DATABASE_URL` at a real Postgres (e.g. [Neon](https://neon.tech), free tier works).
+
+---
+
+## Optional: Telegram alerts
+
+```bash
+TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... npm run dev
+```
+
+Then click **알림 규칙** in the dashboard, paste the values, save. New S-Tier matches ping your phone.
+
+> The bot token is read from environment only and never persisted to localStorage.
+
+---
+
+## Important: scraping ethics & terms of service
+
+The three Korean auction platforms cited above **forbid automated scraping in their Terms of Service**. AuctionCarRadar is intended for **personal, non-commercial research** — it makes modest request volumes and respects `robots.txt` where applicable.
+
+If you fork or self-host this project:
+
+- Keep request rates low (default cadence: 1 scan per 6 hours)
+- Don't redistribute the scraped data publicly
+- Don't repackage this as a paid service that competes with the original platforms
+- If a platform asks you to stop, stop
+
+The code is open-source for **transparency and self-education**, not to industrialize scraping.
+
+---
+
+## Roadmap
+
+- [x] Real scrapers for all 3 platforms (Court blocked-by-design)
+- [x] A-Grade + S-Tier grading with 0–100 score
+- [x] TanStack Start dashboard with 8 components
+- [x] SQLite/PGLite durable scan history
+- [x] Vercel cron + Telegram alerts
+- [x] Unit tests (22 passing) + Playwright E2E (10 passing)
+- [x] S-Tier precision hardening with prototype benchmark tests
+- [ ] Per-platform scraper accuracy improvement (rawText → address/keeper extraction)
+- [ ] Multi-region IP rotation for resilience
+- [ ] Optional read-only public mirror
+
+---
+
+## License
+
+[MIT](LICENSE) — use it, fork it, learn from it.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for bug fixes, scraper accuracy, and UI polish. New auction sources need careful work to respect the platforms' boundaries.
+
+---
+
+<sub>Built as a personal research tool. The Korean-market car-auction ecosystem is small but fascinating — and the public-interest side of "easier access to cheap reliable eco-cars" is real, even if the legal side is gray. Use responsibly.</sub>

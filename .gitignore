@@ -1,5 +1,51 @@
+# Dependencies
 node_modules/
-.project_id
-.github_repo
+
+# Build output (Vite + Nitro + Vercel)
+.vercel/
+.nitro/
+dist/
+build/
+
+# Local database (PGLite)
+.data/
+
+# Local logs
+*.log
+dev-server.log
+
+# Local screenshots from manual QA
+# (kept under screenshots/ in the repo for the README; delete this line if you want them tracked)
+# screenshots/
+
+# Environment files (never commit secrets)
 .env
 .env.*
+!.env.example
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project-specific transient state
+.project_id
+.github_repo
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Vercel
+.vercel/
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Misc
+*.local
+.cache/

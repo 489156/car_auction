@@ -20,9 +20,9 @@
  * `process.env`, which is why the merge has to happen before Vite starts.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_ENV_REL_PATH = ".grok/app-env.json";
@@ -88,6 +88,48 @@ export function projectRoot() {
 }
 
 /**
+ * Resolve a bare command to an executable path inside `node_modules/.bin` if it
+ * exists locally. This is a no-op for absolute paths, paths containing a
+ * separator, and `node`/`node.exe` style binaries — so callers and existing
+ * tests that pass `process.execPath` keep working unchanged.
+ *
+ * On Windows the npm-script PATH does not always surface `.cmd` shims to
+ * `spawn` (Node's `CreateProcess` requires a known extension and `.cmd` files
+ * need `shell: true` to invoke cleanly). Resolving to the absolute `.cmd`
+ * path lets `spawn` find the binary; callers then opt into `shell: true` only
+ * for those Windows script shims, leaving POSIX-style invocations untouched.
+ */
+export function resolveLocalBin(command, root = projectRoot()) {
+  if (!command) return command;
+  if (isAbsolute(command)) return command;
+  if (command.includes(sep) || command.includes("/")) return command;
+  const binDir = join(root, "node_modules", ".bin");
+  if (!existsSync(binDir)) return command;
+  // On Windows, npm-published shims come in pairs: an extensionless POSIX
+  // shell script (`vite`) plus a native `.cmd` (`vite.cmd`). The bare file is
+  // not executable by `CreateProcess`, so check the native variants first and
+  // only fall back to the extensionless file (useful for `node` itself, which
+  // is a real `.exe` and resolves to `node.exe`).
+  const exts = process.platform === "win32"
+    ? [".cmd", ".exe", ".bat", ".ps1", ""]
+    : [""];
+  for (const ext of exts) {
+    const candidate = join(binDir, command + ext);
+    if (existsSync(candidate)) return candidate;
+  }
+  return command;
+}
+
+/**
+ * Whether `resolved` is a Windows `.cmd` / `.bat` shim — i.e. we need
+ * `shell: true` to invoke it. Real `.exe` files and POSIX paths return false.
+ */
+export function needsWindowsShell(resolved) {
+  if (process.platform !== "win32") return false;
+  return /\.(cmd|bat)$/i.test(resolved);
+}
+
+/**
  * Whether `moduleUrl` is the script node was asked to run.
  *
  * Both sides are resolved through symlinks: node realpaths `import.meta.url`
@@ -110,8 +152,15 @@ function main(argv) {
     console.error("usage: node scripts/with-app-env.mjs <command> [args…]");
     process.exit(2);
   }
-  const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const root = projectRoot();
+  const resolvedCommand = resolveLocalBin(command, root);
+  const useShell = needsWindowsShell(resolvedCommand);
+  const env = mergeAppEnv(readAppEnv(root), process.env);
+  const child = spawn(resolvedCommand, args, {
+    stdio: "inherit",
+    env,
+    shell: useShell,
+  });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

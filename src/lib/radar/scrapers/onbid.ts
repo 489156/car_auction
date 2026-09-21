@@ -98,6 +98,18 @@ function toListing(item: OnbidItem): StandardListing | null {
     matchedDangerKeywords: [],
     grade: "rejected",
     rejectReasons: [],
+    storageSite: item.nrtpNm ? `${item.regOrgNm ?? "캠코"} 보관` : null,
+    isSTier: false,
+    sTierScore: 0,
+    sTierBreakdown: {
+      shortMileage: false,
+      warrantyValid: false,
+      sweetDiscount: false,
+      officialStorage: false,
+      crossValidated: false,
+      score: 0,
+      reasons: [],
+    },
     collectedAt: new Date().toISOString(),
   };
 }

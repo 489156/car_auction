@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import type { ScanResult, StandardListing, TelegramSettings } from "./types.ts";
+import type { ScanResult, StandardListing, STierBreakdown, TelegramSettings } from "./types.ts";
 
 export async function saveScanResult(scan: ScanResult): Promise<number> {
   const sql = await getSql();
@@ -25,7 +25,9 @@ export async function saveScanResult(scan: ScanResult): Promise<number> {
         id, scan_id, platform, platform_name, case_no, court_or_dept, car_name,
         year, mileage, fuel, appraisal_price, min_price, discount_rate, auction_date,
         detail_url, image_url, status, key_status, grade, reject_reasons_json,
-        matched_key_keywords_json, raw_text, collected_at, updated_at
+        matched_key_keywords_json, matched_danger_keywords_json,
+        storage_site, is_stier, s_tier_score, s_tier_breakdown_json,
+        raw_text, collected_at, updated_at
       ) VALUES (
         ${listing.id},
         ${scanId},
@@ -48,6 +50,11 @@ export async function saveScanResult(scan: ScanResult): Promise<number> {
         ${listing.grade},
         ${JSON.stringify(listing.rejectReasons)}::jsonb,
         ${JSON.stringify(listing.matchedKeyKeywords)}::jsonb,
+        ${JSON.stringify(listing.matchedDangerKeywords)}::jsonb,
+        ${listing.storageSite},
+        ${listing.isSTier},
+        ${listing.sTierScore},
+        ${JSON.stringify(listing.sTierBreakdown)}::jsonb,
         ${listing.rawText.slice(0, 8000)},
         ${listing.collectedAt}::timestamptz,
         NOW()
@@ -58,6 +65,11 @@ export async function saveScanResult(scan: ScanResult): Promise<number> {
         key_status = EXCLUDED.key_status,
         reject_reasons_json = EXCLUDED.reject_reasons_json,
         matched_key_keywords_json = EXCLUDED.matched_key_keywords_json,
+        matched_danger_keywords_json = EXCLUDED.matched_danger_keywords_json,
+        storage_site = EXCLUDED.storage_site,
+        is_stier = EXCLUDED.is_stier,
+        s_tier_score = EXCLUDED.s_tier_score,
+        s_tier_breakdown_json = EXCLUDED.s_tier_breakdown_json,
         raw_text = EXCLUDED.raw_text,
         updated_at = NOW()
     `;
@@ -99,6 +111,8 @@ export async function loadRecentGradeA(limit = 50): Promise<StandardListing[]> {
 function rowToListing(row: Record<string, unknown>): StandardListing {
   const reject = row.reject_reasons_json;
   const keys = row.matched_key_keywords_json;
+  const dangers = row.matched_danger_keywords_json;
+  const breakdown = (row.s_tier_breakdown_json ?? {}) as Partial<STierBreakdown>;
   return {
     id: String(row.id),
     platform: row.platform as StandardListing["platform"],
@@ -119,9 +133,21 @@ function rowToListing(row: Record<string, unknown>): StandardListing {
     rawText: String(row.raw_text ?? ""),
     keyStatus: String(row.key_status ?? ""),
     matchedKeyKeywords: Array.isArray(keys) ? (keys as string[]) : [],
-    matchedDangerKeywords: [],
+    matchedDangerKeywords: Array.isArray(dangers) ? (dangers as string[]) : [],
     grade: (row.grade as StandardListing["grade"]) ?? "rejected",
     rejectReasons: Array.isArray(reject) ? (reject as string[]) : [],
+    storageSite: row.storage_site == null ? null : String(row.storage_site),
+    isSTier: row.is_stier === true || row.is_stier === "true",
+    sTierScore: row.s_tier_score == null ? 0 : Number(row.s_tier_score),
+    sTierBreakdown: {
+      shortMileage: breakdown.shortMileage === true,
+      warrantyValid: breakdown.warrantyValid === true,
+      sweetDiscount: breakdown.sweetDiscount === true,
+      officialStorage: breakdown.officialStorage === true,
+      crossValidated: breakdown.crossValidated === true,
+      score: typeof breakdown.score === "number" ? breakdown.score : 0,
+      reasons: Array.isArray(breakdown.reasons) ? (breakdown.reasons as string[]) : [],
+    },
     collectedAt: String(row.collected_at ?? new Date().toISOString()),
   };
 }

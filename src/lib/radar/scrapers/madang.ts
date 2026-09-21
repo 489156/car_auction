@@ -180,6 +180,18 @@ function parseBlocks(html: string): StandardListing[] {
       matchedDangerKeywords: [],
       grade: "rejected",
       rejectReasons: [],
+      storageSite: storage || addr || null,
+      isSTier: false,
+      sTierScore: 0,
+      sTierBreakdown: {
+        shortMileage: false,
+        warrantyValid: false,
+        sweetDiscount: false,
+        officialStorage: false,
+        crossValidated: false,
+        score: 0,
+        reasons: [],
+      },
       collectedAt: new Date().toISOString(),
     });
   }

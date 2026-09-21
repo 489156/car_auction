@@ -1,342 +1,333 @@
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  Activity,
-  Filter,
-  Radar,
-  RefreshCw,
-  ShieldAlert,
-  Sparkles,
-} from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Bell, Crown, Radar, Sliders } from "lucide-react";
 import { toast, Toaster } from "sonner";
-import { ListingCard } from "@/components/radar/listing-card";
-import { SettingsPanel } from "@/components/radar/settings-panel";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { DetailModal } from "@/components/radar/detail-modal";
+import {
+  EMPTY_FILTER,
+  FilterBar,
+  type FilterState,
+} from "@/components/radar/filter-bar";
+import { ListingsTable, listingsFilterPredicate } from "@/components/radar/listings-table";
+import { MetricsCards } from "@/components/radar/metrics-cards";
+import { NotificationDrawer } from "@/components/radar/notification-drawer";
+import { ScanModal } from "@/components/radar/scan-modal";
+import { SettingsModal } from "@/components/radar/settings-modal";
+import { SpotlightBanner } from "@/components/radar/spotlight-banner";
 import { runAuctionScan, sendTelegramAlerts } from "@/lib/radar/scan";
 import { useRadarStore } from "@/lib/radar/store";
-import type { ListingGrade, SourceStatus, StandardListing } from "@/lib/radar/types";
+import type { ScanResult, StandardListing } from "@/lib/radar/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({ component: Home });
-
-type Tab = "a" | "candidate" | "all" | "settings";
 
 function Home() {
   const config = useRadarStore((s) => s.config);
   const telegram = useRadarStore((s) => s.telegram);
   const lastScan = useRadarStore((s) => s.lastScan);
+  const lastScanAt = useRadarStore((s) => s.lastScanAt);
   const historyIds = useRadarStore((s) => s.historyIds);
+  const favorites = useRadarStore((s) => s.favorites);
+  const notifications = useRadarStore((s) => s.notifications);
+  const webAlert = useRadarStore((s) => s.webAlert);
+  const setWebAlert = useRadarStore((s) => s.setWebAlert);
   const rememberScan = useRadarStore((s) => s.rememberScan);
   const markNotified = useRadarStore((s) => s.markNotified);
+  const toggleFavorite = useRadarStore((s) => s.toggleFavorite);
+  const clearNotifications = useRadarStore((s) => s.clearNotifications);
 
-  const [tab, setTab] = useState<Tab>("a");
-  const [scanning, setScanning] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
 
   useEffect(() => {
     setHydrated(true);
   }, []);
 
+  // Escape closes whichever overlay is on top — fixes accidental locks and
+  // makes keyboard-only navigation behave like a normal SPA.
+  useEffect(() => {
+    if (!(scanModalOpen || settingsOpen || detailId || notifOpen)) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (notifOpen) setNotifOpen(false);
+      else if (scanModalOpen && !scanning) setScanModalOpen(false);
+      else if (settingsOpen) setSettingsOpen(false);
+      else if (detailId) setDetailId(null);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [scanModalOpen, settingsOpen, detailId, notifOpen, scanning]);
+
   const listings = hydrated ? (lastScan?.listings ?? []) : [];
-  const scan = hydrated ? lastScan : null;
-  const visible = useMemo(() => {
-    if (tab === "a") return listings.filter((row) => row.grade === "a");
-    if (tab === "candidate") return listings.filter((row) => row.grade === "candidate");
-    return listings;
-  }, [listings, tab]);
+  const scan: ScanResult | null = hydrated ? lastScan : null;
+
+  // Spotlight: highest-scoring S-Tier, fall back to best A-grade.
+  const spotlight = useMemo(() => {
+    const eligible = listings.filter((row) => row.grade !== "rejected");
+    if (eligible.length === 0) return null;
+    const sTier = eligible.filter((row) => row.isSTier);
+    if (sTier.length > 0) {
+      return [...sTier].sort((a, b) => b.sTierScore - a.sTierScore)[0] ?? null;
+    }
+    const aGrade = eligible.filter((row) => row.grade === "a");
+    return aGrade[0] ?? eligible[0] ?? null;
+  }, [listings]);
+
+  const filtered = useMemo(() => {
+    const predicate = listingsFilterPredicate(filter);
+    const visible = listings.filter(predicate);
+    return filter.savedOnly ? visible.filter((row) => favorites.includes(row.id)) : visible;
+  }, [filter, listings, favorites]);
+
+  const detailListing: StandardListing | null = useMemo(() => {
+    if (!detailId) return null;
+    return listings.find((row) => row.id === detailId) ?? null;
+  }, [detailId, listings]);
 
   async function handleScan() {
+    if (scanning) return;
     setScanning(true);
     const toastId = toast.loading("3개 플랫폼을 수집하는 중입니다…");
     try {
-      const scan = await runAuctionScan({ data: { config, enrich: true } });
-      const freshIds = rememberScan(scan);
-      const fresh = scan.listings.filter((row) => freshIds.includes(row.id) && row.grade === "a");
-
+      const result = await runAuctionScan({ data: { config, enrich: true } });
+      const { freshIds } = rememberScan(result);
+      const fresh = result.listings.filter(
+        (row) => freshIds.includes(row.id) && row.grade === "a",
+      );
       toast.success(
-        `수집 ${scan.totals.fetched} · 1차 ${scan.totals.stage1} · A급 ${scan.totals.gradeA}`,
+        `수집 ${result.totals.fetched} · 1차 ${result.totals.stage1} · A급 ${result.totals.gradeA} · S-Tier ${result.totals.sTier}`,
         { id: toastId },
       );
-
-      if (telegram.enabled && telegram.botToken && telegram.chatId && fresh.length) {
-        const result = await sendTelegramAlerts({
+      if (
+        telegram.enabled &&
+        telegram.botToken &&
+        telegram.chatId &&
+        fresh.length
+      ) {
+        const telegramResult = await sendTelegramAlerts({
           data: { telegram, listings: fresh },
         });
-        if (result.error) toast.error(result.error);
-        else if (result.sent) {
+        if (telegramResult.error) toast.error(telegramResult.error);
+        else if (telegramResult.sent) {
           markNotified(fresh.map((row) => row.id));
-          toast.success(`텔레그램 ${result.sent}건 전송`);
+          toast.success(`텔레그램 ${telegramResult.sent}건 전송`);
         }
       } else if (fresh.length) {
         markNotified(fresh.map((row) => row.id));
       }
-
-      if (scan.totals.gradeA === 0) setTab(scan.totals.candidates ? "candidate" : "all");
-      else setTab("a");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "스캔 실패", { id: toastId });
+      toast.error(error instanceof Error ? error.message : "스캔 실패", {
+        id: toastId,
+      });
     } finally {
       setScanning(false);
     }
   }
 
   return (
-    <main className="mx-auto min-h-dvh max-w-6xl px-4 pb-24 pt-6 sm:px-6 sm:pt-10">
+    <div className="min-h-dvh bg-bg text-fg">
       <Toaster theme="dark" position="top-center" richColors={false} />
-      <Header scanning={scanning} onScan={handleScan} />
-      <Pipeline />
-      <Stats scan={scan} scanning={scanning} />
-      <Sources sources={scan?.sources} />
-
-      <div className="mt-8 flex flex-wrap gap-2">
-        <TabBtn active={tab === "a"} onClick={() => setTab("a")} count={countGrade(listings, "a")}>
-          A급 알짜
-        </TabBtn>
-        <TabBtn
-          active={tab === "candidate"}
-          onClick={() => setTab("candidate")}
-          count={countGrade(listings, "candidate")}
-        >
-          1차 통과
-        </TabBtn>
-        <TabBtn active={tab === "all"} onClick={() => setTab("all")} count={listings.length}>
-          전체
-        </TabBtn>
-        <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>
-          설정
-        </TabBtn>
-      </div>
-
-      {tab === "settings" ? (
-        <div className="mt-6">
-          <SettingsPanel />
-        </div>
-      ) : (
-        <ListingGrid
-          tab={tab}
-          listings={visible}
-          historyIds={historyIds}
-          scanned={Boolean(scan)}
-          scanning={scanning}
+      <Header
+        scanning={scanning}
+        lastScanAt={lastScanAt}
+        notifications={notifications.length}
+        onRunScanClick={() => setScanModalOpen(true)}
+        onToggleNotif={() => setNotifOpen((v) => !v)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <SpotlightBanner
+          listing={spotlight}
+          onInspect={(id) => setDetailId(id)}
         />
-      )}
-    </main>
+        <MetricsCards scan={scan} />
+        <FilterBar
+          value={filter}
+          onChange={(patch) => setFilter((prev) => ({ ...prev, ...patch }))}
+          onReset={() => setFilter(EMPTY_FILTER)}
+        />
+        {hydrated && scan ? (
+          <ListingsTable
+            listings={filtered}
+            favorites={favorites}
+            onInspect={(id) => setDetailId(id)}
+            onToggleFavorite={toggleFavorite}
+          />
+        ) : (
+          <EmptyState scanning={scanning} />
+        )}
+      </main>
+      <NotificationDrawer
+        open={notifOpen}
+        notifications={notifications}
+        onClose={() => setNotifOpen(false)}
+        onClear={clearNotifications}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onInspect={(id) => setDetailId(id)}
+      />
+      <DetailModal listing={detailListing} onClose={() => setDetailId(null)} />
+      <SettingsModal
+        open={settingsOpen}
+        value={webAlert}
+        onClose={() => setSettingsOpen(false)}
+        onChange={(patch) => setWebAlert(patch)}
+      />
+      <ScanModal
+        open={scanModalOpen}
+        onClose={() => setScanModalOpen(false)}
+        onCompleted={() => {
+          /* simulation done — user can press Run */
+        }}
+        onRunScan={async () => {
+          await handleScan();
+        }}
+        scanning={scanning}
+      />
+      <ClickOutsideCloser onAnyClick={() => setNotifOpen(false)} when={notifOpen} />
+    </div>
   );
 }
 
-function Header({ scanning, onScan }: { scanning: boolean; onScan: () => void }) {
+function Header({
+  scanning,
+  lastScanAt,
+  notifications,
+  onRunScanClick,
+  onToggleNotif,
+  onOpenSettings,
+}: {
+  scanning: boolean;
+  lastScanAt: string | null;
+  notifications: number;
+  onRunScanClick: () => void;
+  onToggleNotif: () => void;
+  onOpenSettings: () => void;
+}) {
+  const lastScanLabel = useMemo(() => {
+    if (!lastScanAt) return "마지막 스캔: —";
+    const d = new Date(lastScanAt);
+    const now = new Date();
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    const hh = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    return sameDay ? `오늘 ${hh}` : `${d.toLocaleDateString("ko-KR")} ${hh}`;
+  }, [lastScanAt]);
+
   return (
-    <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-      <div className="stagger-in">
-        <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-accent">
-          <Radar className={cn("size-3.5", scanning && "radar-sweep")} />
-          AuctionCarRadar
-        </p>
-        <h1 className="mt-2 font-display text-4xl leading-tight tracking-tight sm:text-5xl">
-          A급 친환경 경매차를
-          <br />
-          세 플랫폼에서 걸러냅니다
-        </h1>
-        <p className="mt-3 max-w-xl text-sm text-muted">
-          대법원 경매 · 온비드 공매 · 경매마당을 한 번에 수집하고, 2022년식 이후 · 5만 km 이하 ·
-          하이브리드/전기 · 차키 · 사고 키워드를 AND로 통과한 매물만 남깁니다.
-        </p>
+    <header className="sticky top-0 z-30 border-b border-tile-800/80 bg-tile-900/90 backdrop-blur">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-tr from-stier-500 via-stier-400 to-stier-600 font-black text-tile-900 shadow-lg shadow-stier-500/20">
+            <Crown className="size-5" aria-hidden />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-extrabold tracking-tight text-white">
+                AuctionCarRadar
+              </h1>
+              <span className="rounded-full border border-stier-500/30 bg-stier-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-stier-400">
+                S-Tier Precision Engine
+              </span>
+            </div>
+            <p className="text-xs text-muted">
+              Court Auction · Onbid · Madang · 실시간 웹 레이더
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <div className="hidden items-center gap-2 rounded-xl border border-tile-800 bg-tile-900 px-3 py-1.5 text-xs text-muted md:flex">
+            <span className="size-2 animate-pulse rounded-full bg-emerald-400" />
+            <span>
+              레이더 활성 ·{" "}
+              <strong className="text-fg">{lastScanLabel}</strong>
+            </span>
+          </div>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={onToggleNotif}
+              className="relative rounded-xl border border-tile-800/60 bg-tile-800 p-2.5 text-muted transition hover:bg-tile-700 hover:text-white"
+              aria-label="알림 열기"
+            >
+              <Bell className="h-4 w-4" aria-hidden />
+              {notifications > 0 ? (
+                <span className="absolute -right-1 -top-1 rounded-full bg-stier-500 px-1.5 py-0.5 text-[10px] font-bold text-tile-900 ring-2 ring-tile-900">
+                  {notifications > 9 ? "9+" : notifications}
+                </span>
+              ) : null}
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="hidden items-center gap-1.5 rounded-xl border border-tile-800/60 bg-tile-800 px-3 py-2 text-xs font-semibold text-muted transition hover:bg-tile-700 hover:text-white sm:flex"
+          >
+            <Sliders className="h-3.5 w-3.5" aria-hidden />
+            <span>알림 규칙</span>
+          </button>
+          <button
+            type="button"
+            onClick={onRunScanClick}
+            disabled={scanning}
+            className={cn(
+              "flex items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-stier-400 to-stier-500 px-4 py-2 text-xs font-bold text-tile-900 shadow-lg shadow-stier-500/20 transition hover:from-stier-300 hover:to-stier-400 active:scale-95 sm:text-sm",
+              scanning && "opacity-60",
+            )}
+          >
+            <Radar
+              className={cn("h-3.5 w-3.5 shrink-0", scanning && "radar-sweep")}
+              aria-hidden
+            />
+            <span className="hidden sm:inline">
+              {scanning ? "스캔 중…" : "S-Tier 매칭 스캔"}
+            </span>
+            <span className="sm:hidden">{scanning ? "…" : "스캔"}</span>
+          </button>
+        </div>
       </div>
-      <Button size="lg" onClick={onScan} disabled={scanning} className="w-full sm:w-auto">
-        <RefreshCw className={cn("size-4", scanning && "animate-spin")} />
-        {scanning ? "수집 중" : "지금 탐색"}
-      </Button>
     </header>
   );
 }
 
-function Pipeline() {
-  const steps = [
-    { icon: Activity, label: "멀티 수집" },
-    { icon: Filter, label: "연식·주행·연료" },
-    { icon: ShieldAlert, label: "키·위험 키워드" },
-    { icon: Sparkles, label: "중복 제거·알림" },
-  ];
+function EmptyState({ scanning }: { scanning: boolean }) {
   return (
-    <ol className="mt-8 grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {steps.map((step, i) => (
-        <li
-          key={step.label}
-          className="flex items-center gap-2 rounded-xl bg-surface px-3 py-3 text-sm shadow-[var(--shadow-border)]"
-        >
-          <span className="flex size-8 items-center justify-center rounded-lg bg-raised text-accent">
-            <step.icon className="size-4" />
-          </span>
-          <span>
-            <span className="block text-xs text-subtle">0{i + 1}</span>
-            {step.label}
-          </span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function Stats({
-  scan,
-  scanning,
-}: {
-  scan: ReturnType<typeof useRadarStore.getState>["lastScan"];
-  scanning: boolean;
-}) {
-  const items = [
-    { label: "수집", value: scan?.totals.fetched ?? 0 },
-    { label: "1차 통과", value: scan?.totals.stage1 ?? 0 },
-    { label: "A급", value: scan?.totals.gradeA ?? 0 },
-    { label: "소요(초)", value: scan ? Math.max(1, Math.round(scan.durationMs / 1000)) : 0 },
-  ];
-  return (
-    <section className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {items.map((item) => (
-        <div key={item.label} className="rounded-2xl bg-surface px-4 py-4 shadow-[var(--shadow-border)]">
-          <p className="text-xs text-subtle">{item.label}</p>
-          <p className={cn("mt-1 font-mono text-2xl tabular-nums", scanning && "opacity-50")}>
-            {item.value}
-          </p>
-        </div>
-      ))}
+    <section className="rounded-2xl border border-tile-800 bg-tile-900 p-10 text-center text-muted">
+      <p className="text-sm font-semibold text-fg">
+        {scanning ? "스캔 진행 중…" : "아직 스캔하지 않았습니다"}
+      </p>
+      <p className="mx-auto mt-2 max-w-md text-xs">
+        {scanning
+          ? "플랫폼 응답을 기다리는 동안 필터 엔진은 이미 대기 상태입니다."
+          : "우측 상단의 “S-Tier 매칭 스캔” 버튼을 눌러 3개 플랫폼을 동시에 수집하세요."}
+      </p>
     </section>
   );
 }
 
-function Sources({
-  sources,
+function ClickOutsideCloser({
+  when,
+  onAnyClick,
 }: {
-  sources: ReturnType<typeof useRadarStore.getState>["lastScan"] extends infer T
-    ? T extends { sources: infer S }
-      ? S
-      : undefined
-    : undefined;
+  when: boolean;
+  onAnyClick: () => void;
 }) {
-  const fallback = [
-    { platform: "court", label: "대법원 법원경매", status: "blocked" as SourceStatus, fetched: 0, message: "탐색 전" },
-    { platform: "onbid", label: "캠코 온비드", status: "empty" as SourceStatus, fetched: 0, message: "탐색 전" },
-    { platform: "madang", label: "경매마당", status: "empty" as SourceStatus, fetched: 0, message: "탐색 전" },
-  ];
-  const rows = sources?.length ? sources : fallback;
-  return (
-    <section className="mt-4 grid gap-2 md:grid-cols-3">
-      {rows.map((row) => (
-        <div key={row.platform} className="rounded-xl bg-surface p-4 shadow-[var(--shadow-border)]">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">{row.label}</p>
-            <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted">{row.message}</p>
-          <p className="mt-2 font-mono text-xs tabular-nums text-subtle">{row.fetched}건</p>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function ListingGrid({
-  tab,
-  listings,
-  historyIds,
-  scanned,
-  scanning,
-}: {
-  tab: Tab;
-  listings: StandardListing[];
-  historyIds: string[];
-  scanned: boolean;
-  scanning: boolean;
-}) {
-  if (!scanned && !scanning) {
-    return (
-      <Empty
-        title="아직 스캔하지 않았습니다"
-        body="지금 탐색을 누르면 온비드와 경매마당을 실제 수집하고, 대법원 공식 사이트는 연결 가능 여부를 보고합니다."
-      />
-    );
-  }
-  if (scanning && listings.length === 0) {
-    return (
-      <Empty title="수집 중" body="플랫폼 응답을 기다리는 동안 필터 엔진은 이미 대기 상태입니다." />
-    );
-  }
-  if (listings.length === 0) {
-    return (
-      <Empty
-        title={tab === "a" ? "이번 스캔에서 A급이 없습니다" : "표시할 매물이 없습니다"}
-        body={
-          tab === "a"
-            ? "차키 키워드가 상세 텍스트에 없으면 A급에서 제외됩니다. 1차 통과 탭이나 설정에서 키 필수 조건을 완화해 보세요."
-            : "필터를 완화하거나 다시 탐색해 보세요."
-        }
-      />
-    );
-  }
-  return (
-    <div className="mt-6 grid gap-3 lg:grid-cols-2">
-      {listings.map((listing) => (
-        <ListingCard
-          key={listing.id}
-          listing={listing}
-          isNew={!historyIds.includes(listing.id) && listing.grade === "a"}
-        />
-      ))}
-    </div>
-  );
-}
-
-function Empty({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="mt-6 rounded-2xl bg-surface px-6 py-16 text-center shadow-[var(--shadow-border)]">
-      <p className="font-display text-2xl">{title}</p>
-      <p className="mx-auto mt-2 max-w-md text-sm text-muted">{body}</p>
-    </div>
-  );
-}
-
-function TabBtn({
-  active,
-  onClick,
-  count,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  count?: number;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-11 items-center gap-2 rounded-full px-4 text-sm transition-[background-color,color] duration-150",
-        active ? "bg-accent text-accent-fg" : "bg-surface text-muted shadow-[var(--shadow-border)]",
-      )}
-    >
-      {children}
-      {typeof count === "number" ? (
-        <span className="font-mono text-xs tabular-nums">{count}</span>
-      ) : null}
-    </button>
-  );
-}
-
-function countGrade(listings: StandardListing[], grade: ListingGrade) {
-  return listings.filter((row) => row.grade === grade).length;
-}
-
-function statusLabel(status: SourceStatus) {
-  if (status === "live") return "실시간";
-  if (status === "blocked") return "차단";
-  if (status === "error") return "오류";
-  return "대기";
-}
-
-function statusVariant(status: SourceStatus) {
-  if (status === "live") return "accent" as const;
-  if (status === "blocked" || status === "error") return "danger" as const;
-  return "outline" as const;
+  useEffect(() => {
+    if (!when) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[data-notif-drawer]")) return;
+      onAnyClick();
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [when, onAnyClick]);
+  return null;
 }

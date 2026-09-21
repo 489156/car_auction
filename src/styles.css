@@ -16,6 +16,18 @@
   --color-warn: #c4b48a;
   --color-ring: #8fa37a;
 
+  --color-stier-50: #fdfaef;
+  --color-stier-100: #fbf3c8;
+  --color-stier-300: #fde68a;
+  --color-stier-400: #facc15;
+  --color-stier-500: #eab308;
+  --color-stier-600: #ca8a04;
+  --color-stier-700: #a16207;
+
+  --color-tile-900: #0f172a;
+  --color-tile-800: #1e293b;
+  --color-tile-700: #334155;
+
   --font-sans: "IBM Plex Sans KR", "Segoe UI", system-ui, sans-serif;
   --font-display: "Instrument Serif", "IBM Plex Sans KR", serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -90,10 +102,77 @@
   }
 }
 
+@keyframes s-tier-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes s-tier-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(234 179 8 / 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgb(234 179 8 / 0);
+  }
+}
+
+@keyframes scan-line {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(200%);
+  }
+}
+
 .stagger-in {
   animation: rise-in 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .radar-sweep {
   animation: radar-spin 4.5s linear infinite;
+}
+
+.s-tier-card-glow {
+  box-shadow: 0 0 20px -3px rgba(234, 179, 8, 0.18);
+}
+
+.s-tier-badge-shimmer {
+  background: linear-gradient(
+    110deg,
+    #eab308 0%,
+    #fef08a 50%,
+    #ca8a04 100%
+  );
+  background-size: 200% 100%;
+  animation: s-tier-shimmer 3s infinite linear;
+}
+
+.s-tier-pulse {
+  animation: s-tier-pulse 2.4s ease-out infinite;
+}
+
+.scan-line {
+  position: relative;
+  overflow: hidden;
+}
+
+.scan-line::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 25%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(234, 179, 8, 0.18),
+    transparent
+  );
+  animation: scan-line 2.2s linear infinite;
 }
