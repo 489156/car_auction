@@ -9,6 +9,16 @@ import {
 } from "../parser.ts";
 import { extractCsrf, fetchText, jitterDelay } from "./http.ts";
 
+function unescapePayload(html: string): string {
+  let text = html;
+  for (let i = 0; i < 6; i++) {
+    const next = text.replace(/\\"/g, '"').replace(/\\n/g, "\n");
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
 const SEARCH_PAGE =
   "https://www.onbid.co.kr/op/cltrpbancinf/cltr/cltrcdtnsrch/CltrCdtnSrchController/mvmnCltrCdtnSrchClg.do";
 const SEARCH_API =
@@ -222,12 +232,13 @@ export async function enrichOnbidDetail(listing: StandardListing): Promise<strin
   try {
     const result = await fetchText(listing.detailUrl, { timeoutMs: 12_000 });
     if (!result.ok) return listing.rawText;
-    const text = result.text
+    const unescaped = unescapePayload(result.text);
+    const text = unescaped
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ");
-    return mergeText(listing.rawText, text.slice(0, 8000));
+    return mergeText(listing.rawText, text.slice(0, 12000));
   } catch {
     return listing.rawText;
   }

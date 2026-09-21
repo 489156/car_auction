@@ -12,21 +12,51 @@ import { fetchText, jitterDelay } from "./http.ts";
 const LIST_URL = "https://madangs.com/search/car";
 const MIN_HEALTHY_FETCH = 10;
 
-function field(block: string, key: string): string | null {
-  const quoted = block.match(new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`));
+function fieldFirst(block: string, key: string): string | null {
+  const quoted = block.match(
+    new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`),
+  );
   if (quoted) {
     return quoted[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  const array = block.match(new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*)\\]`));
+  if (array) {
+    return array[1].replace(/"/g, " ").replace(/,/g, " ").trim() || null;
   }
   const raw = block.match(new RegExp(`"${key}"\\s*:\\s*([^,}\\]]+)`));
   if (!raw) return null;
   const value = raw[1].trim();
   if (value === "null" || value === "undefined") return null;
-  if (value.startsWith("[")) {
-    // Arrays like car_etc:["2020년식","65,683km"] — flatten for text matching
-    const inner = block.match(new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*)\\]`));
-    return inner?.[1]?.replace(/"/g, " ").replace(/,/g, " ").trim() ?? null;
-  }
   return value.replace(/^"|"$/g, "");
+}
+
+function fieldLast(block: string, key: string): string | null {
+  const quotedRe = new RegExp(
+    `"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`,
+    "g",
+  );
+  let lastQuoted: string | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = quotedRe.exec(block)) !== null) {
+    lastQuoted = match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  if (lastQuoted != null) return lastQuoted;
+
+  const arrayRe = new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*)\\]`, "g");
+  let lastArray: string | null = null;
+  while ((match = arrayRe.exec(block)) !== null) {
+    lastArray = match[1].replace(/"/g, " ").replace(/,/g, " ").trim() || null;
+  }
+  if (lastArray != null) return lastArray;
+
+  const rawRe = new RegExp(`"${key}"\\s*:\\s*([^,}\\]]+)`, "g");
+  let lastRaw: string | null = null;
+  while ((match = rawRe.exec(block)) !== null) {
+    const value = match[1].trim();
+    if (value === "null" || value === "undefined") continue;
+    lastRaw = value.replace(/^"|"$/g, "");
+  }
+  return lastRaw;
 }
 
 function unescapePayload(html: string): string {
@@ -44,28 +74,49 @@ function parseBlocks(html: string): StandardListing[] {
   const listings: StandardListing[] = [];
   const seen = new Set<string>();
 
-  const mCodeRe = /"m_code"\s*:\s*"?([^",}\s]+)"?/g;
-  let match: RegExpExecArray | null;
-  while ((match = mCodeRe.exec(text)) !== null) {
-    const mCode = match[1];
+  // car_name / case_num / year sit BEFORE m_code in each object; fuel/storage/addr after.
+  const parts = text.split(/"m_code"\s*:\s*"?/);
+  for (let i = 1; i < parts.length; i++) {
+    const codeMatch = parts[i].match(/^([^",}\s]+)/);
+    const mCode = codeMatch?.[1];
     if (!mCode || seen.has(mCode)) continue;
 
-    const center = match.index;
-    const block = text.slice(Math.max(0, center - 2500), center + 3500);
-    const carName = field(block, "car_name");
-    const caseNo = field(block, "case_num") ?? field(block, "case_num_dash");
+    const before = parts[i - 1].slice(-2200);
+    const after = parts[i].slice(0, 1600);
+    const carName = fieldLast(before, "car_name");
+    const caseNo =
+      fieldLast(before, "case_num") ?? fieldLast(before, "case_num_dash");
     if (!carName || !caseNo) continue;
     seen.add(mCode);
 
-    const yearField = field(block, "car_year");
+    const yearField = fieldLast(before, "car_year");
     const mileageField =
-      field(block, "car_total_mileage_int") ?? field(block, "car_total_mileage");
-    const fuelField = field(block, "car_fuel") ?? "";
-    const etc = field(block, "car_etc") ?? "";
-    const storage = field(block, "car_storage_method") ?? "";
-    const special = field(block, "special_right") ?? "";
-    const addr = field(block, "addr") ?? "";
-    const blob = mergeText(addr, carName, fuelField, etc, storage, special, block.slice(0, 1800));
+      fieldLast(before, "car_total_mileage_int") ??
+      fieldLast(before, "car_total_mileage") ??
+      fieldFirst(after, "car_total_mileage_int") ??
+      fieldFirst(after, "car_total_mileage");
+    const fuelField =
+      fieldFirst(after, "car_fuel") ?? fieldLast(before, "car_fuel") ?? "";
+    const etc = fieldLast(before, "car_etc") ?? "";
+    const storage =
+      fieldFirst(after, "car_storage_method") ??
+      fieldLast(before, "car_storage_method") ??
+      "";
+    const special =
+      fieldLast(before, "special_right") ??
+      fieldFirst(after, "special_right") ??
+      "";
+    const addr = fieldFirst(after, "addr") ?? fieldLast(before, "addr") ?? "";
+    const blob = mergeText(
+      addr,
+      carName,
+      fuelField,
+      etc,
+      storage,
+      special,
+      before.slice(-800),
+      after.slice(0, 800),
+    );
     const parsed = extractCarDetails(blob);
 
     const year =
@@ -77,20 +128,33 @@ function parseBlocks(html: string): StandardListing[] {
       parseMileage(String(mileageField ?? "")) ??
       (mileageField && /^\d+$/.test(mileageField) ? Number(mileageField) : null) ??
       parsed.mileage;
-    const fuel = parsed.fuel === "기타" ? extractCarDetails(fuelField).fuel : parsed.fuel;
+    const fuel =
+      parsed.fuel === "기타" ? extractCarDetails(fuelField).fuel : parsed.fuel;
 
-    const appraisal = parseWon(field(block, "m_evaluate_price") ?? field(block, "eval_price_v"));
-    const minPrice = parseWon(
-      field(block, "low_price") ?? field(block, "m_bid_price_last") ?? field(block, "last_price"),
+    const appraisal = parseWon(
+      fieldLast(before, "m_evaluate_price") ??
+        fieldFirst(after, "m_evaluate_price") ??
+        fieldFirst(after, "eval_price_v"),
     );
-    const path = field(block, "case_url") ?? `/caview?m_code=${mCode}`;
+    const minPrice = parseWon(
+      fieldFirst(after, "low_price") ??
+        fieldLast(before, "m_bid_price_last") ??
+        fieldFirst(after, "last_price"),
+    );
+    const path =
+      fieldLast(before, "case_url") ??
+      fieldFirst(after, "case_url") ??
+      `/caview?m_code=${mCode}`;
 
     listings.push({
       id: `madang:${caseNo}`,
       platform: "madang",
       platformName: "경매마당",
       caseNo,
-      courtOrDept: field(block, "bubwon") ?? field(block, "bubwon_short") ?? "법원 미상",
+      courtOrDept:
+        fieldLast(before, "bubwon") ??
+        fieldLast(before, "bubwon_short") ??
+        "법원 미상",
       carName,
       year,
       mileage,
@@ -98,10 +162,18 @@ function parseBlocks(html: string): StandardListing[] {
       appraisalPrice: appraisal,
       minPrice,
       discountRate: discountRate(appraisal, minPrice),
-      auctionDate: field(block, "m_bid_date") ?? field(block, "m_bid_date_last") ?? "—",
+      auctionDate:
+        fieldLast(before, "m_bid_date") ??
+        fieldLast(before, "m_bid_date_last") ??
+        fieldFirst(after, "m_bid_date") ??
+        "—",
       detailUrl: path.startsWith("http") ? path : `https://madangs.com${path}`,
-      imageUrl: field(block, "img_url"),
-      status: field(block, "state") ?? field(block, "pbctCltrStatNm") ?? "",
+      imageUrl: fieldLast(before, "img_url") ?? fieldFirst(after, "img_url"),
+      status:
+        fieldLast(before, "state") ??
+        fieldFirst(after, "state") ??
+        fieldFirst(after, "pbctCltrStatNm") ??
+        "",
       rawText: mergeText(addr, etc, storage, special, fuelField, carName),
       keyStatus: "미검사",
       matchedKeyKeywords: [],
@@ -114,6 +186,16 @@ function parseBlocks(html: string): StandardListing[] {
   return listings;
 }
 
+function stripHtml(text: string): string {
+  return text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, " ");
+}
+
 async function fetchMadangOnce(): Promise<{
   ok: boolean;
   status: number;
@@ -123,14 +205,19 @@ async function fetchMadangOnce(): Promise<{
 }> {
   const result = await fetchText(LIST_URL, { timeoutMs: 20_000 });
   if (!result.ok) {
-    return { ok: false, status: result.status, listings: [], bytes: 0, signalCount: 0 };
+    return {
+      ok: false,
+      status: result.status,
+      listings: [],
+      bytes: 0,
+      signalCount: 0,
+    };
   }
   const signalCount = (result.text.match(/car_name/g) || []).length;
-  const listings = parseBlocks(result.text);
   return {
     ok: true,
     status: result.status,
-    listings,
+    listings: parseBlocks(result.text),
     bytes: result.text.length,
     signalCount,
   };
@@ -141,16 +228,7 @@ export async function scrapeMadang(
 ): Promise<{ listings: StandardListing[]; report: SourceReport }> {
   try {
     let best = await fetchMadangOnce();
-    // Retry once if the Next.js shell arrived but parse yield was thin
-    if (
-      best.ok &&
-      best.listings.length < MIN_HEALTHY_FETCH &&
-      best.signalCount >= MIN_HEALTHY_FETCH
-    ) {
-      await jitterDelay(400, 900);
-      const retry = await fetchMadangOnce();
-      if (retry.listings.length > best.listings.length) best = retry;
-    } else if (best.ok && best.listings.length < MIN_HEALTHY_FETCH) {
+    if (best.ok && best.listings.length < MIN_HEALTHY_FETCH) {
       await jitterDelay(400, 900);
       const retry = await fetchMadangOnce();
       if (retry.listings.length > best.listings.length) best = retry;
@@ -203,17 +281,16 @@ export async function scrapeMadang(
   }
 }
 
-export async function enrichMadangDetail(listing: StandardListing): Promise<string> {
+export async function enrichMadangDetail(
+  listing: StandardListing,
+): Promise<string> {
   try {
     const result = await fetchText(listing.detailUrl, { timeoutMs: 12_000 });
     if (!result.ok) return listing.rawText;
-    const text = result.text
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/\s+/g, " ");
-    return mergeText(listing.rawText, text.slice(0, 8000));
+    // Detail pages are also Next.js shells — unescape RSC payloads before stripping tags.
+    const unescaped = unescapePayload(result.text);
+    const text = stripHtml(unescaped);
+    return mergeText(listing.rawText, text.slice(0, 12000));
   } catch {
     return listing.rawText;
   }

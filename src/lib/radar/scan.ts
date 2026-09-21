@@ -53,7 +53,7 @@ export const runAuctionScan = createServerFn({ method: "POST" })
       );
       const targets = prelim
         .filter((row) => row.grade === "a" || row.grade === "candidate")
-        .slice(0, 8);
+        .slice(0, 20);
       await Promise.all(
         targets.map(async (row) => {
           const extra =

@@ -103,11 +103,18 @@ export function discountRate(
 
 export function findKeywords(text: string, keywords: string[]): string[] {
   if (!text) return [];
+  const compact = text.replace(/\s+/g, "");
   const found: string[] = [];
   for (const word of keywords) {
     const trimmed = word.trim();
     if (!trimmed) continue;
-    if (text.includes(trimmed)) found.push(trimmed);
+    const compactWord = trimmed.replace(/\s+/g, "");
+    if (
+      text.includes(trimmed) ||
+      (compactWord.length > 0 && compact.includes(compactWord))
+    ) {
+      found.push(trimmed);
+    }
   }
   return found;
 }
