@@ -20,7 +20,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "check:scrapers": "node --experimental-strip-types scripts/verify-scrapers.mjs",
-    "check:scrapers:fast": "node --experimental-strip-types scripts/verify-scrapers.mjs --no-enrich"
+    "check:scrapers:fast": "node --experimental-strip-types scripts/verify-scrapers.mjs --no-enrich",
+    "radar:cron": "node --experimental-strip-types scripts/run-scheduled-radar.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

@@ -40,7 +40,12 @@ export const useRadarStore = create<RadarState>()(
       name: "auction-car-radar",
       partialize: (state) => ({
         config: state.config,
-        telegram: state.telegram,
+        // Never persist the bot token in localStorage — prefer TELEGRAM_BOT_TOKEN.
+        telegram: {
+          enabled: state.telegram.enabled,
+          chatId: state.telegram.chatId,
+          botToken: "",
+        },
         historyIds: state.historyIds,
         lastScan: state.lastScan,
       }),

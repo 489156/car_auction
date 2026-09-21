@@ -1,5 +1,5 @@
-import { n as fetchText } from "./http-ChsCgeta.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/court-G7fFGAbT.js
+import { n as fetchText } from "./http-BM2hjrjK.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/court-De4bIqDK.js
 var COURT_HOME = "https://www.courtauction.go.kr/pgj/index.on";
 async function scrapeCourt() {
 	try {

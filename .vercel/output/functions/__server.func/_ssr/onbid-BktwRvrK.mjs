@@ -1,6 +1,15 @@
-import { n as fetchText, r as jitterDelay, t as extractCsrf } from "./http-ChsCgeta.mjs";
-import { a as parseMileage, i as mergeText, n as discountRate, o as parseWon, r as extractCarDetails, s as parseYear } from "./scan-Cftsl-xP.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/onbid-DCVwPhtQ.js
+import { n as fetchText, r as jitterDelay, t as extractCsrf } from "./http-BM2hjrjK.mjs";
+import { a as parseMileage, i as mergeText, n as discountRate, o as parseWon, r as extractCarDetails, s as parseYear } from "./scan-H37VM0YZ.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/onbid-BktwRvrK.js
+function unescapePayload(html) {
+	let text = html;
+	for (let i = 0; i < 6; i++) {
+		const next = text.replace(/\\"/g, "\"").replace(/\\n/g, "\n");
+		if (next === text) break;
+		text = next;
+	}
+	return text;
+}
 var SEARCH_PAGE = "https://www.onbid.co.kr/op/cltrpbancinf/cltr/cltrcdtnsrch/CltrCdtnSrchController/mvmnCltrCdtnSrchClg.do";
 var SEARCH_API = "https://www.onbid.co.kr/op/cltrpbancinf/clbtcltrclg/cltrclbtcltrclg/CltrClbtCltrClgController/inqCltrClbtVhcClg.do";
 function toListing(item) {
@@ -151,8 +160,8 @@ async function enrichOnbidDetail(listing) {
 	try {
 		const result = await fetchText(listing.detailUrl, { timeoutMs: 12e3 });
 		if (!result.ok) return listing.rawText;
-		const text = result.text.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-		return mergeText(listing.rawText, text.slice(0, 8e3));
+		const text = unescapePayload(result.text).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+		return mergeText(listing.rawText, text.slice(0, 12e3));
 	} catch {
 		return listing.rawText;
 	}

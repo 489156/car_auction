@@ -16,7 +16,9 @@ export function SettingsPanel() {
     <div className="grid gap-6 lg:grid-cols-2">
       <section className="rounded-2xl bg-surface p-5 shadow-[var(--shadow-border)]">
         <h2 className="font-display text-xl text-fg">필터 조건</h2>
-        <p className="mt-1 text-sm text-muted">명세서 기본값: 2022년식↑, 5만 km↓, 하이브리드·전기, AND 조건.</p>
+        <p className="mt-1 text-sm text-muted">
+          명세서 기본값: 2022년식↑, 5만 km↓, 하이브리드·전기, AND 조건.
+        </p>
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <Field label="최소 연식">
@@ -54,7 +56,10 @@ export function SettingsPanel() {
             value={config.keywordsMustHave.join(", ")}
             onChange={(e) =>
               setConfig({
-                keywordsMustHave: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                keywordsMustHave: e.target.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean),
               })
             }
           />
@@ -64,7 +69,10 @@ export function SettingsPanel() {
             value={config.keywordsExclude.join(", ")}
             onChange={(e) =>
               setConfig({
-                keywordsExclude: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                keywordsExclude: e.target.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean),
               })
             }
           />
@@ -73,7 +81,9 @@ export function SettingsPanel() {
         <div className="mt-5 flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-3">
           <div>
             <p className="text-sm font-medium">차키 키워드 필수</p>
-            <p className="text-xs text-subtle">끄면 연식·주행·연료만 통과한 매물도 A급으로 봅니다.</p>
+            <p className="text-xs text-subtle">
+              끄면 연식·주행·연료만 통과한 매물도 A급으로 봅니다.
+            </p>
           </div>
           <Switch
             checked={config.requireKeyKeyword}
@@ -89,7 +99,9 @@ export function SettingsPanel() {
       <section className="rounded-2xl bg-surface p-5 shadow-[var(--shadow-border)]">
         <h2 className="font-display text-xl text-fg">텔레그램 알림</h2>
         <p className="mt-1 text-sm text-muted">
-          BotFather에서 봇을 만들고, 봇에게 말을 건 뒤 채팅 ID를 넣으세요. 토큰은 이 기기에만 저장됩니다.
+          봇 토큰은 서버 환경변수 <code className="text-xs">TELEGRAM_BOT_TOKEN</code>에
+          두는 것을 권장합니다. 브라우저 localStorage에는 더 이상 저장하지 않습니다.
+          채팅 ID는 UI 또는 <code className="text-xs">TELEGRAM_CHAT_ID</code>로 설정하세요.
         </p>
 
         <div className="mt-5 flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-3">
@@ -100,18 +112,18 @@ export function SettingsPanel() {
           />
         </div>
 
-        <Field className="mt-4" label="봇 토큰">
+        <Field className="mt-4" label="봇 토큰 (선택 · 세션 전용, 저장 안 함)">
           <Input
             type="password"
             autoComplete="off"
-            placeholder="123456:ABC..."
+            placeholder="환경변수 TELEGRAM_BOT_TOKEN 우선"
             value={telegram.botToken}
             onChange={(e) => setTelegram({ botToken: e.target.value.trim() })}
           />
         </Field>
         <Field className="mt-4" label="채팅 ID">
           <Input
-            placeholder="123456789"
+            placeholder="123456789 또는 TELEGRAM_CHAT_ID"
             value={telegram.chatId}
             onChange={(e) => setTelegram({ chatId: e.target.value.trim() })}
           />

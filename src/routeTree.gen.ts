@@ -10,33 +10,43 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiCronRadarRouteImport } from './routes/api/cron/radar'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCronRadarRoute = ApiCronRadarRouteImport.update({
+  id: '/api/cron/radar',
+  path: '/api/cron/radar',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/cron/radar': typeof ApiCronRadarRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/cron/radar': typeof ApiCronRadarRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/cron/radar': typeof ApiCronRadarRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/cron/radar'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/cron/radar'
+  id: '__root__' | '/' | '/api/cron/radar'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiCronRadarRoute: typeof ApiCronRadarRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +58,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/cron/radar': {
+      id: '/api/cron/radar'
+      path: '/api/cron/radar'
+      fullPath: '/api/cron/radar'
+      preLoaderRoute: typeof ApiCronRadarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiCronRadarRoute: ApiCronRadarRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

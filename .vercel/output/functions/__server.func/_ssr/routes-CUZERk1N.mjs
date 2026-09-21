@@ -1,16 +1,16 @@
-import { i as __toESM } from "../_runtime.mjs";
-import { n as DEFAULT_TELEGRAM, t as DEFAULT_SEARCH_CONFIG } from "./config-CaI-hVHF.mjs";
+import { o as __toESM } from "../_runtime.mjs";
+import { n as DEFAULT_SEARCH_CONFIG, r as DEFAULT_TELEGRAM } from "./rolldown-runtime-D7D4PA-g.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { n as require_jsx_runtime } from "../_libs/radix-ui__react-context+react.mjs";
 import { n as Slot } from "../_libs/@radix-ui/react-primitive+[...].mjs";
-import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
 import { a as Radar, c as Gauge, d as ExternalLink, f as Activity, i as RefreshCw, l as Funnel, n as Sparkles, o as Landmark, r as ShieldAlert, s as KeyRound, u as Fuel } from "../_libs/lucide-react.mjs";
+import { n as runAuctionScan, r as sendTelegramAlerts } from "./router-oE6oyfm7.mjs";
 import { n as toast, t as Toaster } from "../_libs/sonner.mjs";
 import { n as clsx, t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as twMerge } from "../_libs/tailwind-merge.mjs";
 import { n as SwitchThumb, t as Switch$1 } from "../_libs/@radix-ui/react-switch+[...].mjs";
 import { n as create, t as persist } from "../_libs/zustand.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/routes-CmHrcHi0.js
+//#region node_modules/.nitro/vite/services/ssr/assets/routes-CUZERk1N.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 function cn(...inputs) {
@@ -241,7 +241,11 @@ var useRadarStore = create()(persist((set, get) => ({
 	name: "auction-car-radar",
 	partialize: (state) => ({
 		config: state.config,
-		telegram: state.telegram,
+		telegram: {
+			enabled: state.telegram.enabled,
+			chatId: state.telegram.chatId,
+			botToken: ""
+		},
 		historyIds: state.historyIds,
 		lastScan: state.lastScan
 	})
@@ -338,9 +342,21 @@ function SettingsPanel() {
 					className: "font-display text-xl text-fg",
 					children: "텔레그램 알림"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "mt-1 text-sm text-muted",
-					children: "BotFather에서 봇을 만들고, 봇에게 말을 건 뒤 채팅 ID를 넣으세요. 토큰은 이 기기에만 저장됩니다."
+					children: [
+						"봇 토큰은 서버 환경변수 ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "text-xs",
+							children: "TELEGRAM_BOT_TOKEN"
+						}),
+						"에 두는 것을 권장합니다. 브라우저 localStorage에는 더 이상 저장하지 않습니다. 채팅 ID는 UI 또는 ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "text-xs",
+							children: "TELEGRAM_CHAT_ID"
+						}),
+						"로 설정하세요."
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "mt-5 flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-3",
@@ -354,11 +370,11 @@ function SettingsPanel() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Field, {
 					className: "mt-4",
-					label: "봇 토큰",
+					label: "봇 토큰 (선택 · 세션 전용, 저장 안 함)",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
 						type: "password",
 						autoComplete: "off",
-						placeholder: "123456:ABC...",
+						placeholder: "환경변수 TELEGRAM_BOT_TOKEN 우선",
 						value: telegram.botToken,
 						onChange: (e) => setTelegram({ botToken: e.target.value.trim() })
 					})
@@ -367,7 +383,7 @@ function SettingsPanel() {
 					className: "mt-4",
 					label: "채팅 ID",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Input, {
-						placeholder: "123456789",
+						placeholder: "123456789 또는 TELEGRAM_CHAT_ID",
 						value: telegram.chatId,
 						onChange: (e) => setTelegram({ chatId: e.target.value.trim() })
 					})
@@ -385,35 +401,6 @@ function Field({ label, className, children }) {
 		}), children]
 	});
 }
-var createSsrRpc = (functionId) => {
-	const url = "/_serverFn/" + functionId;
-	const serverFnMeta = { id: functionId };
-	const fn = async (...args) => {
-		return (await getServerFnById(functionId, { origin: "server" }))(...args);
-	};
-	return Object.assign(fn, {
-		url,
-		serverFnMeta,
-		[TSS_SERVER_FUNCTION]: true
-	});
-};
-var runAuctionScan = createServerFn({ method: "POST" }).validator({ parse(input) {
-	const data = input ?? {};
-	return {
-		config: {
-			...DEFAULT_SEARCH_CONFIG,
-			...data.config
-		},
-		enrich: data.enrich !== false
-	};
-} }).handler(createSsrRpc("93528b6dfa3de3ef3a78a0378788808ad4ea1155c8e4dabbfbfad7126a795270"));
-var sendTelegramAlerts = createServerFn({ method: "POST" }).validator({ parse(input) {
-	const data = input;
-	return {
-		telegram: data.telegram,
-		listings: Array.isArray(data.listings) ? data.listings : []
-	};
-} }).handler(createSsrRpc("92d2355c98b380f8cb80cce32b15e5d7e3b8d474191fbbc63609bebff08597c5"));
 function Home() {
 	const config = useRadarStore((s) => s.config);
 	const telegram = useRadarStore((s) => s.telegram);

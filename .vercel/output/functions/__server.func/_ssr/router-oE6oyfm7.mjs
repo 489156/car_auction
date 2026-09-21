@@ -1,11 +1,12 @@
-import { i as __toESM, n as __exportAll } from "../_runtime.mjs";
+import { o as __toESM } from "../_runtime.mjs";
+import { n as DEFAULT_SEARCH_CONFIG, t as __exportAll } from "./rolldown-runtime-D7D4PA-g.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
 import { _ as useRouter, f as createRouter, g as createRootRoute, h as createFileRoute, l as Scripts, m as lazyRouteComponent, p as Outlet, u as HeadContent } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as require_jsx_runtime } from "../_libs/radix-ui__react-context+react.mjs";
+import { n as TSS_SERVER_FUNCTION, r as getServerFnById, t as createServerFn } from "./ssr.mjs";
 import { t as TriangleAlert } from "../_libs/lucide-react.mjs";
 import { a as union, i as string, n as number, r as object, t as literal } from "../_libs/zod.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-DZIk-wdg.js
-var router_DZIk_wdg_exports = /* @__PURE__ */ __exportAll({ getRouter: () => getRouter });
+//#region node_modules/.nitro/vite/services/ssr/assets/router-oE6oyfm7.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var FALLBACK_MESSAGE = "An unexpected error occurred. Try reloading the page.";
@@ -301,7 +302,7 @@ function PreviewHostBridge() {
 }
 var styles_default = "/assets/styles--6VetDVV.css";
 var APP_NAME = "AuctionCarRadar";
-var Route$1 = createRootRoute({
+var Route$2 = createRootRoute({
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },
@@ -366,13 +367,65 @@ var Route$1 = createRootRoute({
 		})]
 	})
 });
-var $$splitComponentImporter = () => import("./routes-CmHrcHi0.mjs");
-var rootRouteChildren = { IndexRoute: createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter, "component") }).update({
-	id: "/",
-	path: "/",
-	getParentRoute: () => Route$1
-}) };
-var routeTree = Route$1._addFileChildren(rootRouteChildren)._addFileTypes();
+var $$splitComponentImporter = () => import("./routes-CUZERk1N.mjs");
+var Route$1 = createFileRoute("/")({ component: lazyRouteComponent($$splitComponentImporter, "component") });
+var createSsrRpc = (functionId) => {
+	const url = "/_serverFn/" + functionId;
+	const serverFnMeta = { id: functionId };
+	const fn = async (...args) => {
+		return (await getServerFnById(functionId, { origin: "server" }))(...args);
+	};
+	return Object.assign(fn, {
+		url,
+		serverFnMeta,
+		[TSS_SERVER_FUNCTION]: true
+	});
+};
+var runAuctionScan = createServerFn({ method: "POST" }).validator({ parse(input) {
+	const data = input ?? {};
+	return {
+		config: {
+			...DEFAULT_SEARCH_CONFIG,
+			...data.config
+		},
+		enrich: data.enrich !== false,
+		persist: data.persist !== false
+	};
+} }).handler(createSsrRpc("93528b6dfa3de3ef3a78a0378788808ad4ea1155c8e4dabbfbfad7126a795270"));
+var sendTelegramAlerts = createServerFn({ method: "POST" }).validator({ parse(input) {
+	const data = input;
+	return {
+		telegram: data.telegram,
+		listings: Array.isArray(data.listings) ? data.listings : []
+	};
+} }).handler(createSsrRpc("92d2355c98b380f8cb80cce32b15e5d7e3b8d474191fbbc63609bebff08597c5"));
+var runScheduledRadar = createServerFn({ method: "POST" }).validator({ parse(input) {
+	return { secret: (input ?? {}).secret };
+} }).handler(createSsrRpc("02eba702d4a5ca0df66a4a191037c297cfe1cf08b508fd214ecad2942f0756e4"));
+async function handle({ request }) {
+	const url = new URL(request.url);
+	const result = await runScheduledRadar({ data: { secret: request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || url.searchParams.get("secret") || void 0 } });
+	const status = result.ok ? 200 : result.error === "unauthorized" ? 401 : 500;
+	return Response.json(result, { status });
+}
+var Route = createFileRoute("/api/cron/radar")({ server: { handlers: {
+	GET: handle,
+	POST: handle
+} } });
+var rootRouteChildren = {
+	IndexRoute: Route$1.update({
+		id: "/",
+		path: "/",
+		getParentRoute: () => Route$2
+	}),
+	ApiCronRadarRoute: Route.update({
+		id: "/api/cron/radar",
+		path: "/api/cron/radar",
+		getParentRoute: () => Route$2
+	})
+};
+var routeTree = Route$2._addFileChildren(rootRouteChildren)._addFileTypes();
+var router_exports = /* @__PURE__ */ __exportAll({ getRouter: () => getRouter });
 function getRouter() {
 	return createRouter({
 		routeTree,
@@ -380,4 +433,4 @@ function getRouter() {
 	});
 }
 //#endregion
-export { getRouter, router_DZIk_wdg_exports as t };
+export { runAuctionScan as n, sendTelegramAlerts as r, router_exports as t };

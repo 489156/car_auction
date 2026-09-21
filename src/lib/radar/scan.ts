@@ -1,14 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
 import { DEFAULT_SEARCH_CONFIG } from "./config.ts";
 import { applyFilter } from "./filter.ts";
+import {
+  getNotifiedIds,
+  markListingsNotified,
+  resolveTelegram,
+  saveScanResult,
+} from "./persistence.ts";
 import type { ScanResult, SearchConfig, StandardListing, TelegramSettings } from "./types.ts";
 
 const ScanInputSchema = {
-  parse(input: unknown): { config: SearchConfig; enrich: boolean } {
-    const data = (input ?? {}) as { config?: Partial<SearchConfig>; enrich?: boolean };
+  parse(input: unknown): { config: SearchConfig; enrich: boolean; persist?: boolean } {
+    const data = (input ?? {}) as {
+      config?: Partial<SearchConfig>;
+      enrich?: boolean;
+      persist?: boolean;
+    };
     return {
       config: { ...DEFAULT_SEARCH_CONFIG, ...data.config },
       enrich: data.enrich !== false,
+      persist: data.persist !== false,
     };
   },
 };
@@ -27,69 +38,80 @@ function dedupe(listings: StandardListing[]): StandardListing[] {
   return [...byId.values()];
 }
 
+async function executeScan(config: SearchConfig, enrich: boolean): Promise<ScanResult> {
+  const started = Date.now();
+  const [{ scrapeMadang, enrichMadangDetail }, { scrapeOnbid, enrichOnbidDetail }, { scrapeCourt }] =
+    await Promise.all([
+      import("./scrapers/madang.ts"),
+      import("./scrapers/onbid.ts"),
+      import("./scrapers/court.ts"),
+    ]);
+
+  const [madang, onbid, court] = await Promise.all([
+    scrapeMadang(config),
+    scrapeOnbid(config),
+    scrapeCourt(),
+  ]);
+
+  let listings = dedupe([...madang.listings, ...onbid.listings, ...court.listings]);
+
+  if (enrich) {
+    const prelim = listings.map((row) =>
+      applyFilter(row, { ...config, requireKeyKeyword: false }),
+    );
+    const targets = prelim
+      .filter((row) => row.grade === "a" || row.grade === "candidate")
+      .slice(0, 20);
+    await Promise.all(
+      targets.map(async (row) => {
+        const extra =
+          row.platform === "madang"
+            ? await enrichMadangDetail(row)
+            : row.platform === "onbid"
+              ? await enrichOnbidDetail(row)
+              : row.rawText;
+        const original = listings.find((item) => item.id === row.id);
+        if (original) original.rawText = extra;
+      }),
+    );
+  }
+
+  listings = listings
+    .map((row) => applyFilter(row, config))
+    .sort((a, b) => {
+      const rank = { a: 0, candidate: 1, rejected: 2 };
+      if (rank[a.grade] !== rank[b.grade]) return rank[a.grade] - rank[b.grade];
+      return (b.year ?? 0) - (a.year ?? 0);
+    });
+
+  const stage1 = listings.filter((row) => row.grade === "a" || row.grade === "candidate");
+  return {
+    scannedAt: new Date().toISOString(),
+    durationMs: Date.now() - started,
+    sources: [court.report, onbid.report, madang.report],
+    listings,
+    totals: {
+      fetched: listings.length,
+      stage1: stage1.length,
+      gradeA: listings.filter((row) => row.grade === "a").length,
+      candidates: listings.filter((row) => row.grade === "candidate").length,
+      rejected: listings.filter((row) => row.grade === "rejected").length,
+    },
+  };
+}
+
 export const runAuctionScan = createServerFn({ method: "POST" })
   .validator(ScanInputSchema)
   .handler(async ({ data }): Promise<ScanResult> => {
-    const started = Date.now();
-    const { config, enrich } = data;
-    const [{ scrapeMadang, enrichMadangDetail }, { scrapeOnbid, enrichOnbidDetail }, { scrapeCourt }] =
-      await Promise.all([
-        import("./scrapers/madang.ts"),
-        import("./scrapers/onbid.ts"),
-        import("./scrapers/court.ts"),
-      ]);
-
-    const [madang, onbid, court] = await Promise.all([
-      scrapeMadang(config),
-      scrapeOnbid(config),
-      scrapeCourt(),
-    ]);
-
-    let listings = dedupe([...madang.listings, ...onbid.listings, ...court.listings]);
-
-    if (enrich) {
-      const prelim = listings.map((row) =>
-        applyFilter(row, { ...config, requireKeyKeyword: false }),
-      );
-      const targets = prelim
-        .filter((row) => row.grade === "a" || row.grade === "candidate")
-        .slice(0, 20);
-      await Promise.all(
-        targets.map(async (row) => {
-          const extra =
-            row.platform === "madang"
-              ? await enrichMadangDetail(row)
-              : row.platform === "onbid"
-                ? await enrichOnbidDetail(row)
-                : row.rawText;
-          const original = listings.find((item) => item.id === row.id);
-          if (original) original.rawText = extra;
-        }),
-      );
+    const scan = await executeScan(data.config, data.enrich);
+    if (data.persist) {
+      try {
+        await saveScanResult(scan);
+      } catch (error) {
+        console.error("radar persist failed", error);
+      }
     }
-
-    listings = listings
-      .map((row) => applyFilter(row, config))
-      .sort((a, b) => {
-        const rank = { a: 0, candidate: 1, rejected: 2 };
-        if (rank[a.grade] !== rank[b.grade]) return rank[a.grade] - rank[b.grade];
-        return (b.year ?? 0) - (a.year ?? 0);
-      });
-
-    const stage1 = listings.filter((row) => row.grade === "a" || row.grade === "candidate");
-    return {
-      scannedAt: new Date().toISOString(),
-      durationMs: Date.now() - started,
-      sources: [court.report, onbid.report, madang.report],
-      listings,
-      totals: {
-        fetched: listings.length,
-        stage1: stage1.length,
-        gradeA: listings.filter((row) => row.grade === "a").length,
-        candidates: listings.filter((row) => row.grade === "candidate").length,
-        rejected: listings.filter((row) => row.grade === "rejected").length,
-      },
-    };
+    return scan;
   });
 
 function telegramBody(listing: StandardListing): string {
@@ -123,8 +145,11 @@ function telegramBody(listing: StandardListing): string {
 }
 
 const NotifyInput = {
-  parse(input: unknown): { telegram: TelegramSettings; listings: StandardListing[] } {
-    const data = input as { telegram: TelegramSettings; listings: StandardListing[] };
+  parse(input: unknown): { telegram?: Partial<TelegramSettings>; listings: StandardListing[] } {
+    const data = input as {
+      telegram?: Partial<TelegramSettings>;
+      listings: StandardListing[];
+    };
     return {
       telegram: data.telegram,
       listings: Array.isArray(data.listings) ? data.listings : [],
@@ -135,12 +160,16 @@ const NotifyInput = {
 export const sendTelegramAlerts = createServerFn({ method: "POST" })
   .validator(NotifyInput)
   .handler(async ({ data }): Promise<{ sent: number; error?: string }> => {
-    const { telegram, listings } = data;
+    const telegram = resolveTelegram(data.telegram);
     if (!telegram.enabled || !telegram.botToken || !telegram.chatId) {
-      return { sent: 0, error: "텔레그램 봇 토큰과 채팅 ID가 필요합니다." };
+      return {
+        sent: 0,
+        error:
+          "텔레그램이 비활성이거나 토큰/채팅 ID가 없습니다. TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수 또는 설정값을 확인하세요.",
+      };
     }
     let sent = 0;
-    for (const listing of listings) {
+    for (const listing of data.listings) {
       const url = `https://api.telegram.org/bot${telegram.botToken}/sendMessage`;
       const response = await fetch(url, {
         method: "POST",
@@ -157,5 +186,96 @@ export const sendTelegramAlerts = createServerFn({ method: "POST" })
       }
       sent += 1;
     }
+    if (sent) {
+      try {
+        await markListingsNotified(data.listings.map((row) => row.id));
+      } catch (error) {
+        console.error("radar notify ledger failed", error);
+      }
+    }
     return { sent };
   });
+
+const ScheduledInput = {
+  parse(input: unknown): { secret?: string } {
+    const data = (input ?? {}) as { secret?: string };
+    return { secret: data.secret };
+  },
+};
+
+export const runScheduledRadar = createServerFn({ method: "POST" })
+  .validator(ScheduledInput)
+  .handler(
+    async ({
+      data,
+    }): Promise<{
+      ok: boolean;
+      error?: string;
+      scan?: ScanResult;
+      notified: number;
+      freshIds: string[];
+    }> => {
+      const expected = process.env.CRON_SECRET?.trim();
+      if (expected && data.secret !== expected) {
+        return { ok: false, error: "unauthorized", notified: 0, freshIds: [] };
+      }
+
+      const scan = await executeScan(DEFAULT_SEARCH_CONFIG, true);
+      try {
+        await saveScanResult(scan);
+      } catch (error) {
+        console.error("scheduled persist failed", error);
+      }
+
+      const known = new Set(await getNotifiedIds());
+      const fresh = scan.listings.filter(
+        (row) => row.grade === "a" && !known.has(row.id),
+      );
+      if (!fresh.length) {
+        return { ok: true, scan, notified: 0, freshIds: [] };
+      }
+
+      const telegram = resolveTelegram({ enabled: true });
+      if (!telegram.botToken || !telegram.chatId) {
+        return {
+          ok: true,
+          scan,
+          notified: 0,
+          freshIds: fresh.map((row) => row.id),
+          error: "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not configured",
+        };
+      }
+
+      let notified = 0;
+      for (const listing of fresh) {
+        const url = `https://api.telegram.org/bot${telegram.botToken}/sendMessage`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            chat_id: telegram.chatId,
+            text: telegramBody(listing),
+            disable_web_page_preview: false,
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.text();
+          return {
+            ok: false,
+            scan,
+            notified,
+            freshIds: fresh.map((row) => row.id),
+            error: `Telegram HTTP ${response.status}: ${body.slice(0, 180)}`,
+          };
+        }
+        notified += 1;
+      }
+      await markListingsNotified(fresh.map((row) => row.id));
+      return {
+        ok: true,
+        scan,
+        notified,
+        freshIds: fresh.map((row) => row.id),
+      };
+    },
+  );
