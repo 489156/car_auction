@@ -231,4 +231,91 @@ describe("per-block field extraction (the original bug surface)", () => {
     assert.equal(extract(blocks[1].block), "2025-B-002");
     assert.equal(extract(blocks[2].block), "2025-C-003");
   });
+
+  /**
+   * Regression for the user-reported bug:
+   * "ARKANA's lowest price of 17.5M KRW was displayed as 58.1M KRW —
+   *  GLC's lowest price" (and other rows were similarly jumbled).
+   *
+   * Build a two-item fixture whose numbers are deliberately distinct and
+   * whose field ordering causes the OLD window-based parser to leak GLC's
+   * numbers into ARKANA's record. The new block-scoped parser must keep
+   * them strictly separate.
+   */
+  it("ARKANA vs GLC: prices are not swapped across rows (the original user report)", () => {
+    // Item 1 = ARKANA Hybrid, low 17.5M KRW. Item 2 = Mercedes-Benz GLC 300,
+    // low 58.1M KRW. Field order is the same as real madang payloads (prices
+    // appear BEFORE m_code, so a window centred on m_code would cross both).
+    const arkana = `{` +
+      `"case_num": "2025-ARKANA",` +
+      `"car_name": "ARKANA \ud558\uc774\ube0c\ub9ac\ub4dc",` +
+      `"addr": "\uc138\uc885 \uac15\ub0a8\uad6c",` +
+      `"car_year": 2025,` +
+      `"car_total_mileage_int": 15638,` +
+      `"car_fuel": "\ud558\uc774\ube0c\ub9ac\ub4dc",` +
+      `"car_storage_method": "\uc628\ud14c\uc774\ud130\ub9c8\ud2b8",` +
+      `"m_evaluate_price": 25000000,` +
+      `"eval_price_v": 25000000,` +
+      `"low_price": 17500000,` +
+      `"m_bid_price_last": 17500000,` +
+      `"last_price": 17500000,` +
+      `"m_state": { "dday": "D-21" },` +
+      `"m_code": "M_ARKANA"` +
+      `}`;
+    const glc = `{` +
+      `"case_num": "2026-GLC",` +
+      `"car_name": "Mercedes-Benz GLC 300 4MATIC Coupe",` +
+      `"addr": "\uc131\ub0a8\uc9c0\uc6d0",` +
+      `"car_year": 2025,` +
+      `"car_total_mileage_int": 21575,` +
+      `"car_fuel": "\ud558\uc774\ube0c\ub9ac\ub4dc",` +
+      `"car_storage_method": "\uc628\ud14c\uc774\ud5c8\ube0c",` +
+      `"m_evaluate_price": 83000000,` +
+      `"eval_price_v": 83000000,` +
+      `"low_price": 58100000,` +
+      `"m_bid_price_last": 58100000,` +
+      `"last_price": 58100000,` +
+      `"m_state": { "dday": "D-7" },` +
+      `"m_code": "M_GLC"` +
+      `}`;
+    const mixed = `[${arkana},${glc}]`;
+    const blocks = findItemBlocks(mixed);
+    assert.equal(blocks.length, 2);
+
+    // Per-listing assertions — read each block in isolation and verify its
+    // own numbers, so a swap is caught even if both items end up in the
+    // array (rather than crashing on lookup).
+    const extractLast = (block: string, key: string): number | null => {
+      const re = new RegExp(`"${key}"\\s*:\\s*(\\d+)`, "g");
+      const values = [...block.matchAll(re)].map((m) => Number(m[1]));
+      return values.length ? values[values.length - 1] : null;
+    };
+
+    const arkanaBlock = blocks.find((b) => b.mCode === "M_ARKANA")!.block;
+    const glcBlock = blocks.find((b) => b.mCode === "M_GLC")!.block;
+
+    // ARKANA must carry ARKANA's own prices, never GLC's.
+    assert.equal(extractLast(arkanaBlock, "low_price"), 17_500_000);
+    assert.equal(extractLast(arkanaBlock, "m_evaluate_price"), 25_000_000);
+    assert.ok(
+      !arkanaBlock.includes("58100000"),
+      "ARKANA block leaked GLC's 58,100,000 price",
+    );
+    assert.ok(
+      !arkanaBlock.includes("Mercedes-Benz GLC"),
+      "ARKANA block leaked GLC's car_name",
+    );
+
+    // GLC must carry GLC's own prices, never ARKANA's.
+    assert.equal(extractLast(glcBlock, "low_price"), 58_100_000);
+    assert.equal(extractLast(glcBlock, "m_evaluate_price"), 83_000_000);
+    assert.ok(
+      !glcBlock.includes("17500000"),
+      "GLC block leaked ARKANA's 17,500,000 price",
+    );
+    assert.ok(
+      !glcBlock.includes("ARKANA"),
+      "GLC block leaked ARKANA's car_name",
+    );
+  });
 });
