@@ -12,6 +12,10 @@ import { fetchText, jitterDelay } from "./http.ts";
 const LIST_URL = "https://madangs.com/search/car";
 const MIN_HEALTHY_FETCH = 10;
 
+/**
+ * Extract the first value of `key` in `block`.
+ * Handles `"key":"string"`, `"key":[array]`, and `"key":scalar` shapes.
+ */
 function fieldFirst(block: string, key: string): string | null {
   const quoted = block.match(
     new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`),
@@ -30,6 +34,11 @@ function fieldFirst(block: string, key: string): string | null {
   return value.replace(/^"|"$/g, "");
 }
 
+/**
+ * Extract the LAST value of `key` in `block`.
+ * Some items emit placeholder fields (e.g. `"car_storage_method":""` before
+ * the real value later in the block); we want the last write.
+ */
 function fieldLast(block: string, key: string): string | null {
   const quotedRe = new RegExp(
     `"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`,
@@ -69,44 +78,105 @@ function unescapePayload(html: string): string {
   return text;
 }
 
+/**
+ * Find every `{ ... }` object block at the *top* level of the page payload
+ * (i.e. objects separated by `,` inside the items array). For each block,
+ * record whether it contains an `"m_code"` key so we can dedupe.
+ *
+ * Implementation: a single forward scan with a JSON-aware depth counter
+ * (string literals are skipped, and `\"` is treated as an escape). This
+ * avoids the recursive walker bug where `\"` inside a value string was
+ * mistaken for a real string boundary.
+ */
+export function findItemBlocks(
+  text: string,
+): { mCode: string; block: string }[] {
+  // Find every `{` that sits at the top level of an items array — i.e. right
+  // after `[` or `,{`. The match keeps the comma so we know the offset.
+  const topLevelRe = /(?:\[\s*|\},\s*)\{/g;
+  const starts: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = topLevelRe.exec(text)) !== null) {
+    // The `{` itself is the last char of the match.
+    starts.push(m.index + m[0].length - 1);
+  }
+
+  const seen = new Set<string>();
+  const out: { mCode: string; block: string }[] = [];
+  for (const start of starts) {
+    // Walk forward, JSON-aware, until matching `}`.
+    let end = start + 1;
+    let depth = 1;
+    let safety = 0;
+    while (end < text.length && depth > 0) {
+      if (++safety > 1_000_000) break; // defensive — should never fire
+      const c = text[end];
+      if (c === '"') {
+        // Skip the entire string literal. `\"` is an escape, not a close.
+        end++;
+        while (end < text.length && text[end] !== '"') {
+          if (text[end] === "\\") end++; // skip escaped char
+          end++;
+        }
+        end++; // move past closing `"`
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      end++;
+    }
+    if (depth !== 0) continue; // malformed
+    const block = text.slice(start, end);
+    const mCodeMatch = block.match(/"m_code"\s*:\s*"?([^",}\s]+)/);
+    const mCode = mCodeMatch?.[1];
+    if (!mCode) continue;
+    if (seen.has(mCode)) continue;
+    seen.add(mCode);
+    out.push({ mCode, block });
+  }
+  return out;
+}
+
+/**
+ * Kept for the test suite — given an `m_code` value, return the enclosing
+ * `{ ... }` block. Implemented as a thin wrapper around `findItemBlocks`
+ * so the two paths can never diverge.
+ */
+export function findBlockForMCode(
+  text: string,
+  mCodeValue: string,
+): string | null {
+  const blocks = findItemBlocks(text);
+  const hit = blocks.find((b) => b.mCode === mCodeValue);
+  return hit ? hit.block : null;
+}
+
 function parseBlocks(html: string): StandardListing[] {
   const text = unescapePayload(html);
   const listings: StandardListing[] = [];
-  const seen = new Set<string>();
 
-  // car_name / case_num / year sit BEFORE m_code in each object; fuel/storage/addr after.
-  const parts = text.split(/"m_code"\s*:\s*"?/);
-  for (let i = 1; i < parts.length; i++) {
-    const codeMatch = parts[i].match(/^([^",}\s]+)/);
-    const mCode = codeMatch?.[1];
-    if (!mCode || seen.has(mCode)) continue;
+  // Each block is one item's complete `{ ... }` — every field extraction below
+  // is scoped to this block, so we never leak into the previous or next item.
+  const blocks = findItemBlocks(text);
 
-    const before = parts[i - 1].slice(-2200);
-    const after = parts[i].slice(0, 1600);
-    const carName = fieldLast(before, "car_name");
+  for (const { block } of blocks) {
+    const carName = fieldFirst(block, "car_name");
     const caseNo =
-      fieldLast(before, "case_num") ?? fieldLast(before, "case_num_dash");
+      fieldFirst(block, "case_num") ?? fieldFirst(block, "case_num_dash");
     if (!carName || !caseNo) continue;
-    seen.add(mCode);
 
-    const yearField = fieldLast(before, "car_year");
+    const yearField = fieldFirst(block, "car_year");
     const mileageField =
-      fieldLast(before, "car_total_mileage_int") ??
-      fieldLast(before, "car_total_mileage") ??
-      fieldFirst(after, "car_total_mileage_int") ??
-      fieldFirst(after, "car_total_mileage");
-    const fuelField =
-      fieldFirst(after, "car_fuel") ?? fieldLast(before, "car_fuel") ?? "";
-    const etc = fieldLast(before, "car_etc") ?? "";
-    const storage =
-      fieldFirst(after, "car_storage_method") ??
-      fieldLast(before, "car_storage_method") ??
-      "";
-    const special =
-      fieldLast(before, "special_right") ??
-      fieldFirst(after, "special_right") ??
-      "";
-    const addr = fieldFirst(after, "addr") ?? fieldLast(before, "addr") ?? "";
+      fieldFirst(block, "car_total_mileage_int") ??
+      fieldFirst(block, "car_total_mileage");
+    const fuelField = fieldFirst(block, "car_fuel") ?? "";
+    const etc = fieldFirst(block, "car_etc") ?? "";
+    // car_storage_method sometimes has a placeholder empty value then a real
+    // value later in the same block — take the last write.
+    const storage = fieldLast(block, "car_storage_method") ?? "";
+    const special = fieldFirst(block, "special_right") ?? "";
+    const addr = fieldFirst(block, "addr") ?? "";
+
     const blob = mergeText(
       addr,
       carName,
@@ -114,8 +184,7 @@ function parseBlocks(html: string): StandardListing[] {
       etc,
       storage,
       special,
-      before.slice(-800),
-      after.slice(0, 800),
+      block.slice(0, 4000),
     );
     const parsed = extractCarDetails(blob);
 
@@ -126,25 +195,26 @@ function parseBlocks(html: string): StandardListing[] {
       parseYear(addr);
     const mileage =
       parseMileage(String(mileageField ?? "")) ??
-      (mileageField && /^\d+$/.test(mileageField) ? Number(mileageField) : null) ??
+      (mileageField && /^\d+$/.test(mileageField)
+        ? Number(mileageField)
+        : null) ??
       parsed.mileage;
     const fuel =
       parsed.fuel === "기타" ? extractCarDetails(fuelField).fuel : parsed.fuel;
 
+    // Prices: take the LAST write inside the block so a placeholder empty
+    // value can't shadow the real value emitted later.
     const appraisal = parseWon(
-      fieldLast(before, "m_evaluate_price") ??
-        fieldFirst(after, "m_evaluate_price") ??
-        fieldFirst(after, "eval_price_v"),
+      fieldLast(block, "m_evaluate_price") ??
+        fieldLast(block, "eval_price_v"),
     );
     const minPrice = parseWon(
-      fieldFirst(after, "low_price") ??
-        fieldLast(before, "m_bid_price_last") ??
-        fieldFirst(after, "last_price"),
+      fieldLast(block, "low_price") ??
+        fieldLast(block, "m_bid_price_last") ??
+        fieldLast(block, "last_price"),
     );
     const path =
-      fieldLast(before, "case_url") ??
-      fieldFirst(after, "case_url") ??
-      `/caview?m_code=${mCode}`;
+      fieldFirst(block, "case_url") ?? `/caview?m_code=${block.match(/m_code":"([^"]+)/)?.[1] ?? ""}`;
 
     listings.push({
       id: `madang:${caseNo}`,
@@ -152,8 +222,8 @@ function parseBlocks(html: string): StandardListing[] {
       platformName: "경매마당",
       caseNo,
       courtOrDept:
-        fieldLast(before, "bubwon") ??
-        fieldLast(before, "bubwon_short") ??
+        fieldFirst(block, "bubwon") ??
+        fieldFirst(block, "bubwon_short") ??
         "법원 미상",
       carName,
       year,
@@ -163,16 +233,14 @@ function parseBlocks(html: string): StandardListing[] {
       minPrice,
       discountRate: discountRate(appraisal, minPrice),
       auctionDate:
-        fieldLast(before, "m_bid_date") ??
-        fieldLast(before, "m_bid_date_last") ??
-        fieldFirst(after, "m_bid_date") ??
+        fieldFirst(block, "m_bid_date") ??
+        fieldFirst(block, "m_bid_date_last") ??
         "—",
       detailUrl: path.startsWith("http") ? path : `https://madangs.com${path}`,
-      imageUrl: fieldLast(before, "img_url") ?? fieldFirst(after, "img_url"),
+      imageUrl: fieldFirst(block, "img_url"),
       status:
-        fieldLast(before, "state") ??
-        fieldFirst(after, "state") ??
-        fieldFirst(after, "pbctCltrStatNm") ??
+        fieldFirst(block, "state") ??
+        fieldFirst(block, "pbctCltrStatNm") ??
         "",
       rawText: mergeText(addr, etc, storage, special, fuelField, carName),
       keyStatus: "미검사",
