@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Bell, Crown, Radar, Sliders } from "lucide-react";
+import { Bell, CarFront, Crown, Radar, Sliders } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import { DetailModal } from "@/components/radar/detail-modal";
 import {
@@ -17,6 +17,9 @@ import { SpotlightBanner } from "@/components/radar/spotlight-banner";
 import { runAuctionScan, sendTelegramAlerts } from "@/lib/radar/scan";
 import { useRadarStore } from "@/lib/radar/store";
 import type { ScanResult, StandardListing } from "@/lib/radar/types";
+import { UsedCarsTable } from "@/components/usedcars/usedcars-table";
+import { runUsedCarScan } from "@/lib/usedcars/scan";
+import type { UsedCarScanResult } from "@/lib/usedcars/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({ component: Home });
@@ -43,6 +46,9 @@ function Home() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
+  const [view, setView] = useState<"auction" | "usedcar">("auction");
+  const [usedCarScanning, setUsedCarScanning] = useState(false);
+  const [usedCarResult, setUsedCarResult] = useState<UsedCarScanResult | null>(null);
 
   useEffect(() => {
     setHydrated(true);
@@ -129,6 +135,29 @@ function Home() {
     }
   }
 
+  async function handleUsedCarScan() {
+    if (usedCarScanning) return;
+    setUsedCarScanning(true);
+    const toastId = toast.loading("K Car + KB차차차를 헤드리스로 수집하는 중입니다…");
+    try {
+      const result = await runUsedCarScan({ data: {} });
+      setUsedCarResult(result);
+      const matched = result.totals.matched;
+      const total = result.totals.fetched;
+      toast.success(
+        `중고 매물 ${total}건 · 필터 통과 ${matched}건 (${result.durationMs}ms)`,
+        { id: toastId },
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "중고 매물 스캔 실패",
+        { id: toastId },
+      );
+    } finally {
+      setUsedCarScanning(false);
+    }
+  }
+
   return (
     <div className="min-h-dvh bg-bg text-fg">
       <Toaster theme="dark" position="top-center" richColors={false} />
@@ -141,25 +170,36 @@ function Home() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <SpotlightBanner
-          listing={spotlight}
-          onInspect={(id) => setDetailId(id)}
-        />
-        <MetricsCards scan={scan} />
-        <FilterBar
-          value={filter}
-          onChange={(patch) => setFilter((prev) => ({ ...prev, ...patch }))}
-          onReset={() => setFilter(EMPTY_FILTER)}
-        />
-        {hydrated && scan ? (
-          <ListingsTable
-            listings={filtered}
-            favorites={favorites}
-            onInspect={(id) => setDetailId(id)}
-            onToggleFavorite={toggleFavorite}
-          />
+        <ViewTabs view={view} onChange={setView} />
+        {view === "auction" ? (
+          <>
+            <SpotlightBanner
+              listing={spotlight}
+              onInspect={(id) => setDetailId(id)}
+            />
+            <MetricsCards scan={scan} />
+            <FilterBar
+              value={filter}
+              onChange={(patch) => setFilter((prev) => ({ ...prev, ...patch }))}
+              onReset={() => setFilter(EMPTY_FILTER)}
+            />
+            {hydrated && scan ? (
+              <ListingsTable
+                listings={filtered}
+                favorites={favorites}
+                onInspect={(id) => setDetailId(id)}
+                onToggleFavorite={toggleFavorite}
+              />
+            ) : (
+              <EmptyState scanning={scanning} />
+            )}
+          </>
         ) : (
-          <EmptyState scanning={scanning} />
+          <UsedCarsView
+            scanning={usedCarScanning}
+            result={usedCarResult}
+            onScan={handleUsedCarScan}
+          />
         )}
       </main>
       <NotificationDrawer
@@ -308,6 +348,160 @@ function EmptyState({ scanning }: { scanning: boolean }) {
           : "우측 상단의 “S-Tier 매칭 스캔” 버튼을 눌러 3개 플랫폼을 동시에 수집하세요."}
       </p>
     </section>
+  );
+}
+
+/**
+ * Top-of-page tab switcher between the auction lane (경매/공매, the original
+ * product) and the used-car lane (중고 매물, Playwright local-only).
+ */
+function ViewTabs({
+  view,
+  onChange,
+}: {
+  view: "auction" | "usedcar";
+  onChange: (v: "auction" | "usedcar") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-2xl border border-tile-800 bg-tile-900 p-1 text-sm">
+      <button
+        type="button"
+        onClick={() => onChange("auction")}
+        className={cn(
+          "flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition sm:text-sm",
+          view === "auction"
+            ? "bg-stier-500/20 text-stier-300 shadow-inner"
+            : "text-muted hover:bg-tile-800 hover:text-white",
+        )}
+      >
+        <Radar className="h-3.5 w-3.5" aria-hidden />
+        경매 / 공매
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("usedcar")}
+        className={cn(
+          "flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition sm:text-sm",
+          view === "usedcar"
+            ? "bg-stier-500/20 text-stier-300 shadow-inner"
+            : "text-muted hover:bg-tile-800 hover:text-white",
+        )}
+      >
+        <CarFront className="h-3.5 w-3.5" aria-hidden />
+        중고 매물 (로컬)
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Used-cars lane view — scan button, status summary, listings table.
+ * The scraper is local-only (Playwright); on Vercel it returns an empty
+ * result with a clear Korean message, so the empty state explains why.
+ */
+function UsedCarsView({
+  scanning,
+  result,
+  onScan,
+}: {
+  scanning: boolean;
+  result: UsedCarScanResult | null;
+  onScan: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-tile-800 bg-tile-900 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-fg">중고 매물 헤드리스 스캔</p>
+            <p className="mt-1 text-xs text-muted">
+              K Car + KB차차차를 Playwright 로 렌더링해 매물을 추출합니다. Vercel 서버리스에서는 동작하지
+              않으므로 로컬 PC 에서만 사용 가능합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onScan}
+            disabled={scanning}
+            className={cn(
+              "flex items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-stier-400 to-stier-500 px-4 py-2 text-xs font-bold text-tile-900 shadow-lg shadow-stier-500/20 transition hover:from-stier-300 hover:to-stier-400 active:scale-95 sm:text-sm",
+              scanning && "opacity-60",
+            )}
+          >
+            <CarFront
+              className={cn("h-3.5 w-3.5 shrink-0", scanning && "radar-sweep")}
+              aria-hidden
+            />
+            <span>{scanning ? "수집 중…" : "중고 매물 스캔"}</span>
+          </button>
+        </div>
+        {result && (
+          <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <SummaryStat label="수집" value={`${result.totals.fetched}건`} />
+            <SummaryStat
+              label="필터 통과"
+              value={`${result.totals.matched}건`}
+              tone="positive"
+            />
+            <SummaryStat label="제외" value={`${result.totals.rejected}건`} />
+            <SummaryStat label="소요" value={`${result.durationMs}ms`} />
+          </div>
+        )}
+        {result?.sources.map((s) => (
+          <div
+            key={s.platform}
+            className="mt-2 flex items-center justify-between rounded-lg border border-tile-800 bg-tile-900/50 px-3 py-2 text-xs text-muted"
+          >
+            <span className="font-semibold text-fg">{s.label}</span>
+            <span className="text-right text-[11px]">{s.message}</span>
+          </div>
+        ))}
+      </section>
+      {result && result.listings.length > 0 ? (
+        <UsedCarsTable listings={result.listings} />
+      ) : (
+        <section className="rounded-2xl border border-tile-800 bg-tile-900 p-10 text-center text-muted">
+          <p className="text-sm font-semibold text-fg">
+            {scanning
+              ? "수집 중…"
+              : result
+                ? "표시할 매물이 없습니다."
+                : "아직 스캔하지 않았습니다"}
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            {scanning
+              ? "헤드리스 브라우저가 페이지를 여는 동안 잠시 기다려 주세요."
+              : result
+                ? "필터 또는 사이트 응답 문제로 매물을 가져오지 못했습니다. 위 메시지를 확인하세요."
+                : "위 “중고 매물 스캔” 버튼을 눌러 2개 매물 사이트에서 매물을 추출하세요."}
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "positive";
+}) {
+  return (
+    <div className="rounded-lg border border-tile-800 bg-tile-900/50 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-muted">{label}</p>
+      <p
+        className={cn(
+          "mt-0.5 font-mono text-sm font-bold",
+          tone === "positive" ? "text-emerald-400" : "text-fg",
+        )}
+      >
+        {value}
+      </p>
+    </div>
   );
 }
 
